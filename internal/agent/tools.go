@@ -322,13 +322,33 @@ func RegisterBuiltinTools(r *Registry, runtime *AgentRuntime) {
 		Handler: runtime.TestConnection,
 	})
 
+	// setup_node
+	r.Register(Tool{
+		Def: ToolDef{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "setup_node",
+				Description: "Install a specific Node.js version on the remote VPS via the NodeSource binary distributions. Call this BEFORE setup_pm2. The version can come from .nvmrc, package.json engines.node, or the user's choice (e.g., '18', '20', '22').",
+				Parameters: JSONSchema{
+					Type: "object",
+					Properties: map[string]JSONProp{
+						"serverId": {Type: "string", Description: "The server ID."},
+						"version":  {Type: "string", Description: "The Node.js major version to install (e.g., '18', '20', '22'). Uses NodeSource setup_{version}.x repo."},
+					},
+					Required: []string{"serverId", "version"},
+				},
+			},
+		},
+		Handler: runtime.SetupNode,
+	})
+
 	// setup_pm2
 	r.Register(Tool{
 		Def: ToolDef{
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "setup_pm2",
-				Description: "Install Node.js and PM2 on the remote VPS. Run this before deploying a Node.js project that should use PM2.",
+				Description: "Install PM2 globally on the remote VPS. Requires Node.js to be already installed (call setup_node first). Uses 'npm install -g pm2'.",
 				Parameters: JSONSchema{
 					Type: "object",
 					Properties: map[string]JSONProp{
@@ -427,7 +447,7 @@ func RegisterBuiltinTools(r *Registry, runtime *AgentRuntime) {
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "start_pm2",
-				Description: "Start (or restart) the deployed project using PM2 on the remote VPS. Also saves the PM2 process list for auto-start on reboot.",
+				Description: "Start (or restart) the deployed project using PM2 on the remote VPS. Writes a .env file and saves the PM2 process list for auto-start on reboot.",
 				Parameters: JSONSchema{
 					Type: "object",
 					Properties: map[string]JSONProp{

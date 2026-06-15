@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useWebSocket, WSMessage } from "../hooks/useWebSocket";
-import { Send, Loader2, Bot, User, Wrench, Check, X, AlertTriangle } from "lucide-react";
+import { Send, Loader2, Bot, User, Wrench, Check, X, AlertTriangle, Square } from "lucide-react";
 
 interface ChatMessage {
   id: string;
@@ -95,6 +95,18 @@ export default function Chat({ projectId }: { projectId: string }) {
           },
         ]);
         break;
+      case "agent_cancelled":
+        setAgentThinking(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "agent",
+            content: "⏹️ Agent stopped.",
+            timestamp: new Date(),
+          },
+        ]);
+        break;
     }
   };
 
@@ -134,6 +146,11 @@ export default function Chat({ projectId }: { projectId: string }) {
         m.role === "choice" ? { ...m, content: `Selected: ${choiceId}`, choices: undefined } : m
       )
     );
+  };
+
+  const handleCancel = () => {
+    send({ type: "cancel", payload: {} });
+    setAgentThinking(false);
   };
 
   return (
@@ -235,13 +252,23 @@ export default function Chat({ projectId }: { projectId: string }) {
             className="flex-1 bg-input border border-border rounded-md px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             disabled={agentThinking}
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || agentThinking}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm flex items-center gap-2 hover:bg-primary/90 disabled:opacity-50 transition-colors"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+          {agentThinking ? (
+            <button
+              onClick={handleCancel}
+              className="px-4 py-2 bg-destructive text-destructive-foreground rounded-md text-sm flex items-center gap-2 hover:bg-destructive/90 transition-colors"
+            >
+              <Square className="w-4 h-4" />
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm flex items-center gap-2 hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>

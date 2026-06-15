@@ -5,47 +5,66 @@ import (
 	"strings"
 )
 
-// SetupPM2 installs Node.js and PM2 on the remote VPS.
-func SetupPM2(client *SSHClient) (string, error) {
-	steps := []struct {
-		desc string
-		cmd  string
-	}{
-		{"Check Node.js", "which node && node --version || echo 'node not found'"},
-		{"Check npm", "which npm && npm --version || echo 'npm not found'"},
-		{"Check PM2", "which pm2 && pm2 --version || echo 'pm2 not found'"},
-	}
-
+// SetupNode installs the specified Node.js major version on the remote VPS
+// using the NodeSource binary distributions repository.
+func SetupNode(client *SSHClient, version string) (string, error) {
 	var output strings.Builder
 
-	for _, step := range steps {
-		out, err := client.Run(step.cmd)
-		if err != nil {
-			output.WriteString(fmt.Sprintf("⚠ %s: %v\n%s\n", step.desc, err, out))
-		} else {
-			output.WriteString(fmt.Sprintf("✓ %s: %s", step.desc, strings.TrimSpace(out)))
-		}
+	// Check if the requested Node version is already installed
+	checkCmd := fmt.Sprintf("node --version 2>/dev/null | grep -q 'v%s' && echo 'installed' || echo 'not installed'", version)
+	checkOut, _ := client.Run(checkCmd)
+
+	if strings.Contains(checkOut, "installed") {
+		nodeVer, _ := client.Run("node --version 2>/dev/null")
+		output.WriteString(fmt.Sprintf("✓ Node.js %s already installed", strings.TrimSpace(nodeVer)))
+		return output.String(), nil
 	}
 
-	// Install Node.js if missing
-	if strings.Contains(output.String(), "node not found") {
-		output.WriteString("\n→ Installing Node.js...\n")
-		installCmd := "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs"
-		out, err := client.Run(installCmd)
-		if err != nil {
-			return output.String(), fmt.Errorf("node install failed: %w\n%s", err, out)
-		}
-		output.WriteString(out)
+	// Install via NodeSource
+	output.WriteString(fmt.Sprintf("→ Installing Node.js %s via NodeSource...\n", version))
+	installCmd := fmt.Sprintf(
+		"curl -fsSL https://deb.nodesource.com/setup_%s.x | bash - && apt-get install -y nodejs",
+		version,
+	)
+	installOut, err := client.Run(installCmd)
+	if err != nil {
+		return output.String(), fmt.Errorf("node %s install failed: %w\n%s", version, err, installOut)
 	}
+	output.WriteString(installOut)
 
-	// Install PM2 globally if missing
-	if strings.Contains(output.String(), "pm2 not found") {
-		output.WriteString("\n→ Installing PM2...\n")
+	// Verify
+	nodeVer, _ := client.Run("node --version 2>/dev/null")
+	output.WriteString(fmt.Sprintf("✓ Node.js %s installed", strings.TrimSpace(nodeVer)))
+
+	return output.String(), nil
+}
+
+// SetupPM2 installs PM2 globally on the remote VPS.
+func SetupPM2(client *SSHClient) (string, error) {
+	var output strings.Builder
+
+	// Check Node.js
+	nodeOut, err := client.Run("node --version 2>/dev/null || echo 'node not found'")
+	if err != nil {
+		output.WriteString(fmt.Sprintf("⚠ node check: %v\n", err))
+	}
+	if strings.Contains(nodeOut, "node not found") {
+		return output.String(), fmt.Errorf("Node.js is not installed — run setup_node first")
+	}
+	output.WriteString(fmt.Sprintf("✓ Node.js: %s\n", strings.TrimSpace(nodeOut)))
+
+	// Check PM2
+	pm2Out, _ := client.Run("pm2 --version 2>/dev/null || echo 'pm2 not found'")
+	if strings.Contains(pm2Out, "pm2 not found") {
+		output.WriteString("→ Installing PM2 globally...\n")
 		out, err := client.Run("npm install -g pm2")
 		if err != nil {
 			return output.String(), fmt.Errorf("pm2 install failed: %w\n%s", err, out)
 		}
 		output.WriteString(out)
+		output.WriteString("✓ PM2 installed\n")
+	} else {
+		output.WriteString(fmt.Sprintf("✓ PM2: %s\n", strings.TrimSpace(pm2Out)))
 	}
 
 	return output.String(), nil
@@ -75,7 +94,7 @@ func StartPM2App(client *SSHClient, name, dir, startCmd string, envVars map[stri
 	}
 
 	// Check if app already exists
-	checkCmd := fmt.Sprintf("pm2 list | grep '%s' || echo 'not_found'", name)
+	checkCmd := fmt.Sprintf("pm2 list 2>/dev/null | grep '%s' || echo 'not_found'", name)
 	checkOut, _ := client.Run(checkCmd)
 
 	if strings.Contains(checkOut, "not_found") {
@@ -98,13 +117,69 @@ func StartPM2App(client *SSHClient, name, dir, startCmd string, envVars map[stri
 	return out, nil
 }
 
-// SavePM2Config saves the PM2 process list for resurrection on reboot.
+// SavePM2Config saves the PM2 process list and ensures PM2 runs as a systemd
+// service so it survives reboots and is supervised by the init system.
 func SavePM2Config(client *SSHClient) (string, error) {
-	out, err := client.Run("pm2 save && pm2 startup systemd -u root --hp /root")
+	var output strings.Builder
+
+	// 1. Save the current PM2 process list
+	out, err := client.Run("pm2 save")
 	if err != nil {
 		return out, fmt.Errorf("pm2 save failed: %w", err)
 	}
-	return out, nil
+	output.WriteString(out)
+
+	// 2. Detect the user PM2 is running as
+	userOut, _ := client.Run("whoami")
+	user := strings.TrimSpace(userOut)
+	if user == "" {
+		user = "root"
+	}
+
+	// 3. Detect PM2 binary path
+	pm2PathOut, _ := client.Run("which pm2 2>/dev/null || echo '/usr/bin/pm2'")
+	pm2Path := strings.TrimSpace(pm2PathOut)
+
+	// 4. Write systemd service file
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=PM2 process manager
+After=network.target
+
+[Service]
+Type=forking
+User=%s
+LimitNOFILE=65536
+ExecStart=%s resurrect
+ExecReload=%s reload all
+ExecStop=%s kill
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PM2_HOME=%s
+
+[Install]
+WantedBy=multi-user.target
+`, user, pm2Path, pm2Path, pm2Path, fmt.Sprintf("/home/%s/.pm2", user))
+
+	// Escape for shell heredoc
+	writeCmd := fmt.Sprintf("cat > /etc/systemd/system/pm2.service << 'UNITEOF'\n%sUNITEOF", serviceContent)
+	out, err = client.Run(writeCmd)
+	if err != nil {
+		output.WriteString(out)
+		return output.String(), fmt.Errorf("write systemd unit failed: %w", err)
+	}
+	output.WriteString("✓ systemd unit written\n")
+
+	// 5. Reload, enable, and start
+	out, err = client.Run("systemctl daemon-reload && systemctl enable pm2 && systemctl restart pm2")
+	if err != nil {
+		output.WriteString(out)
+		return output.String(), fmt.Errorf("systemctl enable failed: %w", err)
+	}
+	output.WriteString(out)
+	output.WriteString("✓ PM2 systemd service enabled and running\n")
+
+	return output.String(), nil
 }
 
 // PM2Status returns the status of a PM2 application.

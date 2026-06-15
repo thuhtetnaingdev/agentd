@@ -302,8 +302,37 @@ func (rt *AgentRuntime) WriteFile(ctx context.Context, args map[string]any) (*To
 
 // --- Deploy Tool Handlers ---
 
+func (rt *AgentRuntime) SetupNode(ctx context.Context, args map[string]any) (*ToolResult, error) {
+	serverID := rt.resolveServerID(args)
+	version, _ := args["version"].(string)
+
+	srv, ok := rt.Config.GetServer(serverID)
+	if !ok {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("server %s not found", serverID)}, nil
+	}
+
+	if version == "" {
+		return &ToolResult{
+			Success: false,
+			Output:  "No Node.js version specified. Use ask_user to let the user choose a version (e.g., 18, 20, 22).",
+			Error:   "version is required",
+		}, nil
+	}
+
+	client := deploy.NewSSHClient(srv.Host, srv.Port, srv.Username, srv.Password)
+	defer client.Close()
+
+	output, err := deploy.SetupNode(client, version)
+	if err != nil {
+		return &ToolResult{Success: false, Output: output, Error: err.Error()}, nil
+	}
+
+	return &ToolResult{Success: true, Output: output}, nil
+}
+
 func (rt *AgentRuntime) SetupPM2(ctx context.Context, args map[string]any) (*ToolResult, error) {
 	serverID := rt.resolveServerID(args)
+
 	srv, ok := rt.Config.GetServer(serverID)
 	if !ok {
 		return &ToolResult{Success: false, Error: fmt.Sprintf("server %s not found", serverID)}, nil

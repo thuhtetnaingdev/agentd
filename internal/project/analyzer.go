@@ -1,6 +1,7 @@
 package project
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,8 @@ type Project struct {
 	StartCmd       string            `json:"startCmd"`
 	PM2Config      string            `json:"pm2Config,omitempty"`
 	PackageManager string            `json:"packageManager,omitempty"` // npm, pnpm, yarn
+	NodeVersion    string            `json:"nodeVersion,omitempty"`    // from .nvmrc or package.json engines.node
+	HasNvmrc       bool              `json:"hasNvmrc"`
 }
 
 // Framework patterns to detect.
@@ -183,6 +186,43 @@ func detectProjectType(dir string, p *Project) {
 		p.PackageManager = "npm"
 	} else if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
 		p.PackageManager = "npm" // default for Node.js projects
+	}
+
+	// Detect .nvmrc
+	if data, err := os.ReadFile(filepath.Join(dir, ".nvmrc")); err == nil {
+		p.HasNvmrc = true
+		v := strings.TrimSpace(string(data))
+		// Strip leading 'v' if present
+		v = strings.TrimPrefix(v, "v")
+		if v != "" && p.NodeVersion == "" {
+			p.NodeVersion = v
+		}
+	}
+
+	// Detect engines.node in package.json
+	if p.Type == "node" && p.NodeVersion == "" {
+		if data, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+			var pkg struct {
+				Engines struct {
+					Node string `json:"node"`
+				} `json:"engines"`
+			}
+			if json.Unmarshal(data, &pkg) == nil && pkg.Engines.Node != "" {
+				// engines.node may be a range like ">=18" or ">=18.0.0 <20.0.0"
+				// Extract the first version number
+				v := strings.TrimPrefix(pkg.Engines.Node, ">=")
+				v = strings.TrimPrefix(v, "^")
+				v = strings.TrimPrefix(v, "~")
+				v = strings.TrimSpace(v)
+				// Take just the major version if it's a range
+				if idx := strings.IndexAny(v, " <"); idx > 0 {
+					v = v[:idx]
+				}
+				if v != "" {
+					p.NodeVersion = v
+				}
+			}
+		}
 	}
 
 	// Detect PM2 config

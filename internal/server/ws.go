@@ -56,7 +56,9 @@ type Session struct {
 	choiceDone chan struct{}
 
 	// Agent runner
-	runner *agent.AgentRunner
+	runner   *agent.AgentRunner
+	cancelFn context.CancelFunc // cancels the running agent loop
+	cancelMu sync.Mutex
 }
 
 func newHub() *Hub {
@@ -197,8 +199,20 @@ func (s *Session) handleMessage(msg WSMessage) {
 		s.handleChat(msg)
 	case "choice_response":
 		s.handleChoiceResponse(msg)
+	case "cancel":
+		s.handleCancel()
 	default:
 		log.Printf("unknown message type: %s", msg.Type)
+	}
+}
+
+// handleCancel stops the currently running agent loop.
+func (s *Session) handleCancel() {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	if s.cancelFn != nil {
+		s.cancelFn()
+		s.cancelFn = nil
 	}
 }
 
@@ -289,10 +303,30 @@ func (s *Session) handleChat(msg WSMessage) {
 		}
 	}
 
+	// Cancel any previous run
+	s.cancelMu.Lock()
+	if s.cancelFn != nil {
+		s.cancelFn()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancelFn = cancel
+	s.cancelMu.Unlock()
+
 	// Run agent in background
 	go func() {
-		ctx := context.Background()
+		defer func() {
+			s.cancelMu.Lock()
+			s.cancelFn = nil
+			s.cancelMu.Unlock()
+		}()
 		if err := s.runner.Run(ctx, payload.Message); err != nil {
+			if err == context.Canceled {
+				s.SendJSON(map[string]any{
+					"type":    "agent_cancelled",
+					"payload": map[string]any{},
+				})
+				return
+			}
 			log.Printf("[agent] run error: %v", err)
 		}
 

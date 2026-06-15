@@ -17,6 +17,7 @@ import {
   Trash2,
   ChevronLeft,
   Server,
+  Square,
 } from "lucide-react";
 import Markdown from "../components/Markdown";
 
@@ -167,6 +168,15 @@ export default function Projects() {
           timestamp: new Date(),
         });
         break;
+      case "agent_cancelled":
+        setAgentThinking(false);
+        addMessage({
+          id: crypto.randomUUID(),
+          role: "agent",
+          content: "⏹️ Agent stopped.",
+          timestamp: new Date(),
+        });
+        break;
     }
   }, []);
 
@@ -195,6 +205,11 @@ export default function Projects() {
       type: "chat",
       payload: { message: userMsg.content, projectId: id, serverId: selectedServer, sessionId: activeSessionId },
     });
+  };
+
+  const handleCancel = () => {
+    send({ type: "cancel", payload: {} });
+    setAgentThinking(false);
   };
 
   const handleChoice = (choiceId: string) => {
@@ -488,13 +503,23 @@ export default function Projects() {
               disabled={agentThinking}
               autoFocus
             />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || agentThinking}
-              className="px-4 py-2.5 bg-primary text-primary-foreground rounded-lg text-sm flex items-center gap-2 hover:bg-primary/90 disabled:opacity-40 transition-all font-medium flex-shrink-0"
-            >
-              <Send className="w-4 h-4" />
-            </button>
+            {agentThinking ? (
+              <button
+                onClick={handleCancel}
+                className="px-4 py-2.5 bg-destructive text-destructive-foreground rounded-lg text-sm flex items-center gap-2 hover:bg-destructive/90 transition-all font-medium flex-shrink-0"
+              >
+                <Square className="w-4 h-4" />
+                Stop
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className="px-4 py-2.5 bg-primary text-primary-foreground rounded-lg text-sm flex items-center gap-2 hover:bg-primary/90 disabled:opacity-40 transition-all font-medium flex-shrink-0"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       </div>
