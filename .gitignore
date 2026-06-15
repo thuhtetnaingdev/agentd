@@ -1,0 +1,28 @@
+# Binary
+/agentd
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# Frontend
+web/dist/
+web/node_modules/
+web/tsconfig.tsbuildinfo
+internal/server/web-dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project data (per-instance, not committed)
+.agentd/
+.reasonix/
