@@ -51,16 +51,12 @@ TMP=$(mktemp)
 curl -fsSL "$URL" -o "$TMP"
 chmod +x "$TMP"
 
-# Install
-if [ ! -d "$INSTALL_DIR" ]; then
-  echo "→ Creating $INSTALL_DIR"
-  mkdir -p "$INSTALL_DIR" 2>/dev/null || sudo mkdir -p "$INSTALL_DIR"
-fi
-
-if mv "$TMP" "$INSTALL_DIR/$BIN" 2>/dev/null; then
-  :
+# Install — try without sudo first, fall back if not writable
+if [ -w "$INSTALL_DIR" ]; then
+  mv "$TMP" "$INSTALL_DIR/$BIN"
 else
   echo "→ Need sudo to install to $INSTALL_DIR"
+  sudo mkdir -p "$INSTALL_DIR" 2>/dev/null
   sudo mv "$TMP" "$INSTALL_DIR/$BIN"
 fi
 
