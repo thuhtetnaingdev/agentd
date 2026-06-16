@@ -8,15 +8,41 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  # Build frontend once (platform-independent) — needed by Go embed.
+  web:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+          # Vite outputs to web/dist by default; Go embed expects internal/server/web-dist
+          mkdir -p ../internal/server/web-dist
+          cp -r dist/* ../internal/server/web-dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: internal/server/web-dist/
+
+  # Build Go binaries for each platform.
+  build:
+    needs: web
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          - os: linux
+          - os: ubuntu-latest
             goos: linux
             goarch: amd64
-          - os: linux
+          - os: ubuntu-latest
             goos: linux
             goarch: arm64
           - os: macos-latest
@@ -27,6 +53,11 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: internal/server/web-dist/
 
       - uses: actions/setup-go@v5
         with:
@@ -40,14 +71,14 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           go build -ldflags "-X main.Version=$VERSION -s -w" -o "agentd_${GOOS}_${GOARCH}" ./cmd/agentd
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: agentd_${{ matrix.goos }}_${{ matrix.goarch }}
           path: agentd_${{ matrix.goos }}_${{ matrix.goarch }}
 
+  # Publish all binaries as a GitHub Release.
   publish:
-    needs: release
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
