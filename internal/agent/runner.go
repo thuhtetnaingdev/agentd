@@ -121,6 +121,11 @@ func (r *AgentRunner) Init() {
 	RegisterBuiltinTools(r.registry, r.runtime)
 }
 
+// SetDefaultServerID updates the runtime's default server (called when user changes server dropdown).
+func (r *AgentRunner) SetDefaultServerID(id string) {
+	r.runtime.DefaultServerID = id
+}
+
 // Run executes the agent loop for a user message.
 func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 	r.messages = append(r.messages, ChatMessage{

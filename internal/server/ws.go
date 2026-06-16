@@ -292,6 +292,11 @@ func (s *Session) handleChat(msg WSMessage) {
 		}
 	}
 
+	// Sync selected server from UI to the runtime (may have changed since runner was created).
+	if s.runner != nil {
+		s.runner.SetDefaultServerID(s.SelectedServerID)
+	}
+
 	// Ensure session exists in store
 	if s.sessionID == "" && s.hub.sessionStore != nil {
 		pid := s.ProjectID
