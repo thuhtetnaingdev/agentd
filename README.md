@@ -17,18 +17,41 @@ Point it at your project, add a VPS server, and type "deploy" — the agent hand
 
 ## Quick start
 
+### One-liner install (macOS / Linux)
+
 ```bash
-# Clone and build
-git clone https://github.com/your-org/agentd.git
+curl -fsSL https://raw.githubusercontent.com/thuhtetnaingdev/agentd/main/install.sh | bash
+```
+
+Pinning a version:
+
+```bash
+VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/thuhtetnaingdev/agentd/main/install.sh | bash
+```
+
+After install:
+
+```bash
+agentd --dir /path/to/your/project --port 3001
+```
+
+### Manage the CLI
+
+```bash
+agentd version     # show version
+agentd update      # update to latest release
+agentd uninstall   # remove the binary (--purge also wipes config)
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/thuhtetnaingdev/agentd.git
 cd agentd
 make all          # builds frontend + Go binary
 
 # Or just build the Go binary (if web-dist/ is already present)
 make build
-
-# Run
-./agentd --dir /path/to/your/project --port 3001
-```
 
 Open `http://localhost:3001`, then:
 
