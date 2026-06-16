@@ -287,6 +287,21 @@ func (rt *AgentRuntime) AskUser(ctx context.Context, args map[string]any) (*Tool
 
 func (rt *AgentRuntime) ListServers(ctx context.Context, args map[string]any) (*ToolResult, error) {
 	servers := rt.Config.ListServers()
+
+	// When a server is selected in the UI (per-project context), only show that one.
+	if rt.DefaultServerID != "" {
+		var filtered []config.ServerConfig
+		for _, s := range servers {
+			if s.ID == rt.DefaultServerID {
+				filtered = append(filtered, s)
+				break
+			}
+		}
+		if len(filtered) > 0 {
+			servers = filtered
+		}
+	}
+
 	// Mask passwords in output — never leak them to chat history
 	for i := range servers {
 		if servers[i].Password != "" {
