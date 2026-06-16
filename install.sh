@@ -54,10 +54,15 @@ chmod +x "$TMP"
 # Install
 if [ ! -d "$INSTALL_DIR" ]; then
   echo "→ Creating $INSTALL_DIR"
-  mkdir -p "$INSTALL_DIR"
+  mkdir -p "$INSTALL_DIR" 2>/dev/null || sudo mkdir -p "$INSTALL_DIR"
 fi
 
-mv "$TMP" "$INSTALL_DIR/$BIN"
+if mv "$TMP" "$INSTALL_DIR/$BIN" 2>/dev/null; then
+  :
+else
+  echo "→ Need sudo to install to $INSTALL_DIR"
+  sudo mv "$TMP" "$INSTALL_DIR/$BIN"
+fi
 
 echo "✓ agentd $TAG installed to $INSTALL_DIR/$BIN"
 echo ""
