@@ -145,7 +145,7 @@ func (rt *AgentRuntime) RunShell(ctx context.Context, args map[string]any) (*Too
 		}
 	}
 
-	// Dangerous local commands — require user confirmation via ask_user
+	// Dangerous local commands — require user confirmation
 	dangerous := []struct {
 		pattern string
 		label   string
@@ -173,13 +173,40 @@ func (rt *AgentRuntime) RunShell(ctx context.Context, args map[string]any) (*Too
 		{"dd if=", "dd (disk operations)"},
 		{"> /dev/", "write to device"},
 	}
+	wasDangerous := false
 	for _, d := range dangerous {
 		if strings.Contains(command, d.pattern) {
-			return &ToolResult{
-				Success: false,
-				Output:  fmt.Sprintf("⚠️  DANGEROUS COMMAND DETECTED: %s\n\nCommand: `%s`\n\nThis command could modify the system or delete data. You MUST use ask_user to get explicit permission from the user before running this. Explain what the command does and why it's needed.", d.label, command),
-				Error:   "dangerous_command_blocked",
-			}, nil
+			// Auto-ask the user for confirmation before running
+			rt.Session.SendJSON(map[string]any{
+				"type": "choice_request",
+				"payload": map[string]any{
+					"prompt": fmt.Sprintf(
+						"⚠️  The agent wants to run a dangerous command:\n\n```\n%s\n```\n\n**Risk:** %s\n\nAllow?",
+						command, d.label,
+					),
+					"choices": []map[string]string{
+						{"id": "yes", "title": "Yes, run it"},
+						{"id": "no", "title": "No, block it"},
+					},
+				},
+			})
+
+			choice, err := rt.Session.WaitForChoice(30 * time.Second)
+			if err != nil || choice != "yes" {
+				reason := "blocked by user"
+				if err != nil {
+					reason = fmt.Sprintf("user didn't respond: %v", err)
+				}
+				return &ToolResult{
+					Success: false,
+					Output:  fmt.Sprintf("⚠️  DANGEROUS COMMAND BLOCKED\n\nCommand: `%s`\nRisk: %s\nReason: %s", command, d.label, reason),
+					Error:   "dangerous_command_blocked",
+				}, nil
+			}
+
+			// User approved — proceed to execute
+			wasDangerous = true
+			break
 		}
 	}
 
@@ -191,6 +218,19 @@ func (rt *AgentRuntime) RunShell(ctx context.Context, args map[string]any) (*Too
 	// Prevent interactive prompts: disconnect stdin
 	cmd.Stdin = nil
 	output, err := cmd.CombinedOutput()
+
+	// Post-check for dangerous commands: verify local disk space wasn't affected
+	if wasDangerous {
+		dfOut, _ := exec.Command("df", "-h", rt.WorkDir).CombinedOutput()
+		if len(dfOut) > 0 {
+			output = append(output, []byte(fmt.Sprintf("\n\n📊 Local disk after command:\n%s", string(dfOut)))...)
+		}
+		// Also check project file integrity
+		gitOut, _ := exec.Command("git", "-C", rt.WorkDir, "status", "--porcelain").CombinedOutput()
+		if len(gitOut) > 0 {
+			output = append(output, []byte(fmt.Sprintf("\n\n📁 Project file changes after command:\n%s", string(gitOut)))...)
+		}
+	}
 
 	if err != nil {
 		return &ToolResult{
@@ -297,7 +337,13 @@ func (rt *AgentRuntime) WriteFile(ctx context.Context, args map[string]any) (*To
 		return &ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
-	return &ToolResult{Success: true, Output: fmt.Sprintf("Wrote %d bytes to %s", len(content), path)}, nil
+	// Post-check: verify the file exists and is readable
+	info, statErr := os.Stat(fullPath)
+	if statErr != nil {
+		return &ToolResult{Success: false, Output: fmt.Sprintf("Wrote file but cannot verify: %v", statErr), Error: statErr.Error()}, nil
+	}
+
+	return &ToolResult{Success: true, Output: fmt.Sprintf("Wrote %d bytes to %s (verified: %d bytes on disk)", len(content), path, info.Size())}, nil
 }
 
 // --- Deploy Tool Handlers ---
@@ -488,6 +534,11 @@ func (rt *AgentRuntime) DeployRsync(ctx context.Context, args map[string]any) (*
 		return &ToolResult{Success: false, Output: output, Error: err.Error()}, nil
 	}
 
+	// Post-check: verify disk space after deployment
+	if warn, _ := deploy.CheckDiskSpace(client); warn != "" {
+		output += fmt.Sprintf("\n\n%s", warn)
+	}
+
 	return &ToolResult{Success: true, Output: output}, nil
 }
 
@@ -526,6 +577,12 @@ func (rt *AgentRuntime) StartPM2(ctx context.Context, args map[string]any) (*Too
 
 	// Save PM2 config for resurrection on reboot
 	deploy.SavePM2Config(client)
+
+	// Post-check: wait a moment then verify the app is online
+	time.Sleep(3 * time.Second)
+	if warn, _ := deploy.CheckPM2Status(client, projectName); warn != "" {
+		output += fmt.Sprintf("\n\n⚠️  Post-check: %s", warn)
+	}
 
 	return &ToolResult{Success: true, Output: output}, nil
 }
@@ -567,6 +624,11 @@ func (rt *AgentRuntime) InstallNginx(ctx context.Context, args map[string]any) (
 	certOut, _ := deploy.InstallCertbot(client)
 	output += "\n" + certOut
 
+	// Post-check: verify nginx is actually running
+	if warn, _ := deploy.CheckWebServerRunning(client, "nginx"); warn != "" {
+		output += fmt.Sprintf("\n\n%s", warn)
+	}
+
 	return &ToolResult{Success: true, Output: output}, nil
 }
 
@@ -590,6 +652,11 @@ func (rt *AgentRuntime) ConfigureNginx(ctx context.Context, args map[string]any)
 	output, err := deploy.ConfigureNginx(client, domain, projectDir, projectName, int(port), isStatic)
 	if err != nil {
 		return &ToolResult{Success: false, Output: output, Error: err.Error()}, nil
+	}
+
+	// Post-check: validate web server config (nginx/caddy/apache)
+	if warn, _ := deploy.ValidateWebServer(client); warn != "" {
+		output += fmt.Sprintf("\n\n⚠️  Post-check: %s", warn)
 	}
 
 	return &ToolResult{Success: true, Output: output}, nil
@@ -617,6 +684,64 @@ func (rt *AgentRuntime) SetupSSL(ctx context.Context, args map[string]any) (*Too
 		return &ToolResult{Success: false, Output: output, Error: err.Error()}, nil
 	}
 
+	// Post-check: verify the SSL cert is installed and valid
+	if warn, _ := deploy.CheckSSLCert(client, domain); warn != "" {
+		output += fmt.Sprintf("\n\n⚠️  Post-check: %s", warn)
+	}
+
+	return &ToolResult{Success: true, Output: output}, nil
+}
+
+func (rt *AgentRuntime) InstallCaddy(ctx context.Context, args map[string]any) (*ToolResult, error) {
+	serverID := rt.resolveServerID(args)
+	srv, ok := rt.Config.GetServer(serverID)
+	if !ok {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("server %s not found", serverID)}, nil
+	}
+
+	client := deploy.NewSSHClient(srv.Host, srv.Port, srv.Username, srv.Password)
+	defer client.Close()
+
+	output, err := deploy.InstallCaddy(client)
+	if err != nil {
+		return &ToolResult{Success: false, Output: output, Error: err.Error()}, nil
+	}
+
+	// Post-check: verify caddy is actually running
+	if warn, _ := deploy.CheckWebServerRunning(client, "caddy"); warn != "" {
+		output += fmt.Sprintf("\n\n%s", warn)
+	}
+
+	return &ToolResult{Success: true, Output: output}, nil
+}
+
+func (rt *AgentRuntime) ConfigureCaddy(ctx context.Context, args map[string]any) (*ToolResult, error) {
+	serverID := rt.resolveServerID(args)
+	domain, _ := args["domain"].(string)
+	projectName, _ := args["projectName"].(string)
+	port, _ := args["port"].(float64) // JSON numbers are float64
+	isStatic, _ := args["isStatic"].(bool)
+
+	srv, ok := rt.Config.GetServer(serverID)
+	if !ok {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("server %s not found", serverID)}, nil
+	}
+
+	client := deploy.NewSSHClient(srv.Host, srv.Port, srv.Username, srv.Password)
+	defer client.Close()
+
+	projectDir := filepath.Join("/var/www", projectName)
+
+	output, err := deploy.ConfigureCaddy(client, domain, projectDir, projectName, int(port), isStatic)
+	if err != nil {
+		return &ToolResult{Success: false, Output: output, Error: err.Error()}, nil
+	}
+
+	// Post-check: validate web server config (nginx/caddy/apache)
+	if warn, _ := deploy.ValidateWebServer(client); warn != "" {
+		output += fmt.Sprintf("\n\n⚠️  Post-check: %s", warn)
+	}
+
 	return &ToolResult{Success: true, Output: output}, nil
 }
 
@@ -641,11 +766,25 @@ func (rt *AgentRuntime) RunSSH(ctx context.Context, args map[string]any) (*ToolR
 
 	output, err := client.Run(command)
 	if err != nil {
+		// Post-check: even on failure, verify disk space wasn't affected
+		if warn, _ := deploy.CheckDiskSpace(client); warn != "" {
+			output += fmt.Sprintf("\n\n%s", warn)
+		}
 		return &ToolResult{
 			Success: false,
 			Output:  output,
 			Error:   err.Error(),
 		}, nil
+	}
+
+	// Post-check: verify disk space after remote command
+	if warn, _ := deploy.CheckDiskSpace(client); warn != "" {
+		output += fmt.Sprintf("\n\n%s", warn)
+	}
+
+	// Post-check: verify critical services are still running
+	if warn, _ := checkRemoteServices(client); warn != "" {
+		output += fmt.Sprintf("\n\n%s", warn)
 	}
 
 	return &ToolResult{Success: true, Output: output}, nil
@@ -837,30 +976,54 @@ func (rt *AgentRuntime) TestConnection(ctx context.Context, args map[string]any)
 	return &ToolResult{Success: true, Output: fmt.Sprintf("Connection successful. Architecture: %s", arch)}, nil
 }
 
+// checkRemoteServices verifies that critical services (nginx, caddy, pm2, docker)
+// are still running on the remote server after a command. Returns warnings if any are down.
+func checkRemoteServices(client *deploy.SSHClient) (string, error) {
+	var warnings []string
+	services := []string{"nginx", "caddy", "pm2", "docker"}
+	for _, svc := range services {
+		out, err := client.Run(fmt.Sprintf("systemctl is-active %s 2>&1 || true", svc))
+		if err != nil {
+			continue
+		}
+		out = strings.TrimSpace(out)
+		// Only warn if the service is known (installed) but not active
+		if out == "inactive" || out == "failed" {
+			warnings = append(warnings, fmt.Sprintf("⚠️  %s is installed but NOT running (status: %s)", svc, out))
+		}
+	}
+	if len(warnings) > 0 {
+		return strings.Join(warnings, "\n"), nil
+	}
+	return "", nil
+}
+
 // AgentLogger adapts log for the agent session.
 type AgentLogger struct {
 	Session Session
 }
 
-func (l *AgentLogger) LogToolCall(name string, args map[string]any) {
+func (l *AgentLogger) LogToolCall(name string, args map[string]any, toolCallID string) {
 	l.Session.SendJSON(map[string]any{
 		"type": "tool_call",
 		"payload": map[string]any{
 			"toolName":    name,
 			"description": fmt.Sprintf("Running %s...", name),
 			"arguments":   args,
+			"toolCallId":  toolCallID,
 		},
 	})
 }
 
-func (l *AgentLogger) LogToolResult(name string, result *ToolResult) {
+func (l *AgentLogger) LogToolResult(name string, result *ToolResult, toolCallID string) {
 	l.Session.SendJSON(map[string]any{
 		"type": "tool_result",
 		"payload": map[string]any{
-			"toolName": name,
-			"success":  result.Success,
-			"output":   result.Output,
-			"error":    result.Error,
+			"toolName":   name,
+			"toolCallId": toolCallID,
+			"success":    result.Success,
+			"output":     result.Output,
+			"error":      result.Error,
 		},
 	})
 }

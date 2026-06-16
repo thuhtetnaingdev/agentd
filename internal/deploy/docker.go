@@ -32,7 +32,8 @@ func SetupDocker(client *SSHClient) (string, error) {
 		installCmd := "curl -fsSL https://get.docker.com | sh"
 		out, err := client.Run(installCmd)
 		if err != nil {
-			return output.String(), fmt.Errorf("docker install failed: %w\n%s", err, out)
+			output.WriteString(out)
+			return output.String(), fmt.Errorf("docker install failed: %w", err)
 		}
 		output.WriteString(out)
 

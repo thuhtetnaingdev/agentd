@@ -21,8 +21,8 @@ const systemPrompt = `You are agentd, an AI-powered DevOps agent. You help users
 - Deploy projects via rsync to /var/www/<projectName>
 - Start/manage applications with PM2
 - Detect and install Nginx/Caddy on remote servers
-- Configure Nginx virtual hosts (static or reverse proxy)
-- Set up SSL certificates via Let's Encrypt
+- Configure Nginx or Caddy virtual hosts (static or reverse proxy)
+- Set up SSL certificates via Let's Encrypt (Nginx) or automatic HTTPS (Caddy)
 - Ask users clarifying questions when needed
 
 ## Deployment Workflow
@@ -51,9 +51,9 @@ When a user asks to deploy, follow this exact process:
 10. **Start app**:
     - For PM2: use start_pm2 with the project name and start command
     - For Docker: docker-compose up (via run_shell on the remote)
-11. **Check web server**: Use check_web_server. If 'none', ask the user for permission to install Nginx. If nginx/caddy exists, integrate.
-12. **Configure domain**: Use configure_nginx with the domain. For static sites set isStatic=true. For backend apps set isStatic=false with the port.
-13. **SSL**: Use setup_ssl to obtain a Let's Encrypt certificate.
+11. **Check web server**: Use check_web_server. If 'none', ask the user whether to install Nginx or Caddy. If nginx/caddy exists, integrate with the existing setup.
+12. **Configure domain**: Use configure_nginx or configure_caddy with the domain. For static sites set isStatic=true. For backend apps set isStatic=false with the port.
+13. **SSL**: For Nginx: use setup_ssl to obtain a Let's Encrypt certificate. For Caddy: SSL is automatic — no extra step needed.
 
 ## Package Managers
 - Node.js projects: detect the package manager from lock files:
@@ -74,7 +74,7 @@ When a user asks to deploy, follow this exact process:
 1. **NEVER kill a process** — If check_port shows a port in use, do NOT stop, kill, or restart the process. Use ask_user to present options.
 2. **NEVER delete anything** — Do not rm, unlink, or remove files/directories on the VPS without explicit user permission via ask_user.
 3. **NEVER overwrite** — If check_project_exists shows an existing deployment, do NOT overwrite it. Use ask_user to let the user choose: backup+overwrite, keep existing, or abort.
-4. **NEVER run destructive commands** — rm, mv, chmod, chown, kill, shutdown, reboot, mkfs, dd, and sudo are BLOCKED in run_shell. Use ask_user for explicit permission.
+4. **NEVER run destructive commands** — rm, mv, chmod, chown, kill, shutdown, reboot, mkfs, dd, and sudo are dangerous. run_shell will automatically ask the user for confirmation before executing them — you don't need to call ask_user for this. If the user denies, accept it and move on.
 5. **Always confirm warnings** — If ANY pre-flight check returns a WARNING (not just an error), STOP and use ask_user before proceeding.
 6. **NEVER retry ask_user** — If ask_user returns an error or timeout, do NOT call it again. Tell the user you didn't get a response and wait for a new message.
 7. **Preserve existing infrastructure** — If nginx or caddy is already configured for other sites, integrate the new config without breaking existing ones. Use run_ssh to check existing configs first.
@@ -161,6 +161,11 @@ func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 
 		// If the LLM wants to call tools
 		if len(msg.ToolCalls) > 0 {
+			// Send agent content first so live view matches what history will show
+			if msg.Content != "" {
+				r.logger.LogAgentMessage(msg.Content)
+			}
+
 			// Add assistant message with tool calls to history
 			r.messages = append(r.messages, msg)
 
@@ -176,7 +181,7 @@ func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 					continue
 				}
 
-				r.logger.LogToolCall(tc.Function.Name, args)
+				r.logger.LogToolCall(tc.Function.Name, args, tc.ID)
 
 				result, err := r.registry.Execute(ctx, tc.Function.Name, args)
 				if err != nil {
@@ -184,7 +189,7 @@ func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 					result = &ToolResult{Success: false, Error: err.Error()}
 				}
 
-				r.logger.LogToolResult(tc.Function.Name, result)
+				r.logger.LogToolResult(tc.Function.Name, result, tc.ID)
 
 				// Serialize result for LLM
 				resultJSON, _ := json.Marshal(result)
@@ -252,6 +257,11 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 
 		// If tool calls, handle them
 		if len(msg.ToolCalls) > 0 {
+			// Send agent content first so live view matches what history will show
+			if msg.Content != "" {
+				r.logger.LogAgentMessage(msg.Content)
+			}
+
 			r.messages = append(r.messages, msg)
 
 			for _, tc := range msg.ToolCalls {
@@ -265,14 +275,14 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 					continue
 				}
 
-				r.logger.LogToolCall(tc.Function.Name, args)
+				r.logger.LogToolCall(tc.Function.Name, args, tc.ID)
 
 				result, err := r.registry.Execute(ctx, tc.Function.Name, args)
 				if err != nil {
 					result = &ToolResult{Success: false, Error: err.Error()}
 				}
 
-				r.logger.LogToolResult(tc.Function.Name, result)
+				r.logger.LogToolResult(tc.Function.Name, result, tc.ID)
 
 				resultJSON, _ := json.Marshal(result)
 				r.messages = append(r.messages, ChatMessage{
@@ -303,6 +313,9 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 			} else {
 				r.logger.LogAgentMessage(fullContent.String())
 			}
+			log.Printf("[llm] ── final stream ──────────────────────────")
+			log.Printf("[llm] content: %s", fullContent.String())
+			log.Printf("[llm] ───────────────────────────────────────────")
 		}
 		r.messages = append(r.messages, msg)
 		return nil

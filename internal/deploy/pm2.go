@@ -28,7 +28,8 @@ func SetupNode(client *SSHClient, version string) (string, error) {
 	)
 	installOut, err := client.Run(installCmd)
 	if err != nil {
-		return output.String(), fmt.Errorf("node %s install failed: %w\n%s", version, err, installOut)
+		output.WriteString(installOut)
+		return output.String(), fmt.Errorf("node %s install failed: %w", version, err)
 	}
 	output.WriteString(installOut)
 
@@ -59,7 +60,8 @@ func SetupPM2(client *SSHClient) (string, error) {
 		output.WriteString("→ Installing PM2 globally...\n")
 		out, err := client.Run("npm install -g pm2")
 		if err != nil {
-			return output.String(), fmt.Errorf("pm2 install failed: %w\n%s", err, out)
+			output.WriteString(out)
+			return output.String(), fmt.Errorf("pm2 install failed: %w", err)
 		}
 		output.WriteString(out)
 		output.WriteString("✓ PM2 installed\n")

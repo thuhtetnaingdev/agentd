@@ -333,46 +333,121 @@ func (s *Session) handleChat(msg WSMessage) {
 		// Save messages to session store
 		if s.hub.sessionStore != nil && s.sessionID != "" {
 			msgs := s.runner.GetMessages()
+
+			// Build a lookup of tool results by ToolCallID so we can
+			// interleave them with their tool_call messages.
+			toolResults := map[string]store.Message{}
+			for _, m := range msgs {
+				if m.Name != "" && m.ToolCallID != "" {
+					sm := store.Message{
+						Role:       "tool",
+						ToolName:   m.Name,
+						ToolCallID: m.ToolCallID,
+						Timestamp:  time.Now(),
+					}
+					var tr struct {
+						Success bool   `json:"success"`
+						Output  string `json:"output"`
+						Error   string `json:"error"`
+					}
+					if err := json.Unmarshal([]byte(m.Content), &tr); err == nil {
+						if tr.Success {
+							sm.Content = tr.Output
+						} else {
+							sm.IsError = true
+							sm.Content = tr.Output
+							if sm.Content == "" {
+								sm.Content = tr.Error
+							}
+							sm.ErrorDetail = tr.Error
+						}
+					} else {
+						sm.Content = m.Content
+					}
+					toolResults[m.ToolCallID] = sm
+				}
+			}
+
 			var storeMsgs []store.Message
 			for _, m := range msgs {
 				if m.Role == "system" {
 					continue
 				}
+
+				// Assistant message with tool calls: store agent content first,
+				// then interleave each tool_call with its result so they are
+				// adjacent in the stored list.
+				if len(m.ToolCalls) > 0 {
+					if m.Content != "" {
+						storeMsgs = append(storeMsgs, store.Message{
+							Role:      "agent",
+							Content:   m.Content,
+							Timestamp: time.Now(),
+						})
+					}
+					for _, tc := range m.ToolCalls {
+						// Store the tool_call
+						storeMsgs = append(storeMsgs, store.Message{
+							Role:       "tool_call",
+							ToolName:   tc.Function.Name,
+							ToolArgs:   tc.Function.Arguments,
+							ToolCallID: tc.ID,
+							Content:    fmt.Sprintf("%s(%s)", tc.Function.Name, abbreviateArgs(tc.Function.Arguments)),
+							Timestamp:  time.Now(),
+						})
+						// Store the matching tool result immediately after
+						if tr, ok := toolResults[tc.ID]; ok {
+							storeMsgs = append(storeMsgs, tr)
+						}
+					}
+					continue
+				}
+
+				// Tool result — already stored above alongside its tool_call
+				if m.Name != "" {
+					// Fallback for tool results without a ToolCallID (old format)
+					if m.ToolCallID == "" {
+						sm := store.Message{
+							Role:      "tool",
+							ToolName:  m.Name,
+							Content:   m.Content,
+							Timestamp: time.Now(),
+						}
+						var tr struct {
+							Success bool   `json:"success"`
+							Output  string `json:"output"`
+							Error   string `json:"error"`
+						}
+						if err := json.Unmarshal([]byte(m.Content), &tr); err == nil {
+							if tr.Success {
+								sm.Content = tr.Output
+							} else {
+								sm.IsError = true
+								sm.Content = tr.Output
+								if sm.Content == "" {
+									sm.Content = tr.Error
+								}
+								sm.ErrorDetail = tr.Error
+							}
+						}
+						storeMsgs = append(storeMsgs, sm)
+					}
+					continue
+				}
+
+				// Regular user/agent message
 				role := m.Role
 				if role == "assistant" {
 					role = "agent"
 				}
-				sm := store.Message{
-					Role:    role,
-					Content: m.Content,
-				}
-				// Capture tool metadata
-				if m.Name != "" {
-					sm.ToolName = m.Name
-					// Parse tool result JSON for success/error
-					var tr struct {
-						Success bool   `json:"success"`
-						Output  string `json:"output"`
-					}
-					if err := json.Unmarshal([]byte(m.Content), &tr); err == nil {
-						sm.Content = tr.Output
-						// Only mark as error if explicitly false AND there's an error field
-						if !tr.Success {
-							var trErr struct {
-								Success bool   `json:"success"`
-								Error   string `json:"error"`
-							}
-							if err2 := json.Unmarshal([]byte(m.Content), &trErr); err2 == nil && trErr.Error != "" {
-								sm.IsError = true
-							}
-						}
-					}
-				}
-				// Skip empty agent messages (LLM returns empty content with tool_calls)
-				if role == "agent" && sm.Content == "" {
+				if role == "agent" && m.Content == "" {
 					continue
 				}
-				storeMsgs = append(storeMsgs, sm)
+				storeMsgs = append(storeMsgs, store.Message{
+					Role:      role,
+					Content:   m.Content,
+					Timestamp: time.Now(),
+				})
 			}
 			s.hub.sessionStore.SaveMessages(s.ProjectID, s.sessionID, storeMsgs)
 		}
@@ -396,4 +471,22 @@ func (s *Session) handleChoiceResponse(msg WSMessage) {
 	case s.choiceCh <- payload.ChoiceID:
 	default:
 	}
+}
+
+// abbreviateArgs returns a compact display string for tool call arguments.
+// e.g. `{"command":"ls -la"}` → `ls -la`
+func abbreviateArgs(argsJSON string) string {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return ""
+	}
+	// Show first meaningful value
+	for _, v := range args {
+		s := fmt.Sprint(v)
+		if len(s) > 60 {
+			s = s[:57] + "..."
+		}
+		return s
+	}
+	return ""
 }

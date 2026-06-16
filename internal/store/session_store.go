@@ -27,10 +27,14 @@ type SessionWithMessages struct {
 
 // Message is a single chat message.
 type Message struct {
-	Role      string `json:"role"`               // user, agent, tool
-	Content   string `json:"content"`
-	ToolName  string `json:"toolName,omitempty"`  // for tool messages
-	IsError   bool   `json:"isError,omitempty"`   // true if tool failed
+	Role        string    `json:"role"`                  // user, agent, tool, tool_call
+	Content     string    `json:"content"`
+	ToolName    string    `json:"toolName,omitempty"`    // for tool/tool_call messages
+	ToolArgs    string    `json:"toolArgs,omitempty"`    // JSON arguments the LLM passed (for tool_call)
+	ToolCallID  string    `json:"toolCallId,omitempty"`  // correlates tool_call ↔ tool result
+	IsError     bool      `json:"isError,omitempty"`     // true if tool failed
+	ErrorDetail string    `json:"errorDetail,omitempty"` // error message when IsError is true
+	Timestamp   time.Time `json:"timestamp"`             // when this message was recorded
 }
 
 // SessionStore persists chat sessions to disk.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -134,6 +135,18 @@ func (c *Client) Chat(messages []ChatMessage, tools []ToolDef) (*ChatResponse, e
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 
+	// Log the request summary
+	lastMsg := messages[len(messages)-1]
+	log.Printf("[llm] ── request (iter) ─────────────────────────")
+	log.Printf("[llm] model=%s  msgs=%d  tools=%d  last_role=%s", c.Model, len(messages), len(tools), lastMsg.Role)
+	if lastMsg.Content != "" {
+		preview := lastMsg.Content
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		log.Printf("[llm] last_msg: %s", preview)
+	}
+
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("api call: %w", err)
@@ -149,6 +162,20 @@ func (c *Client) Chat(messages []ChatMessage, tools []ToolDef) (*ChatResponse, e
 	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+
+	// Log the full LLM response
+	log.Printf("[llm] ── response ──────────────────────────────")
+	if len(chatResp.Choices) > 0 {
+		msg := chatResp.Choices[0].Message
+		log.Printf("[llm] finish_reason: %s", chatResp.Choices[0].FinishReason)
+		if msg.Content != "" {
+			log.Printf("[llm] content: %s", msg.Content)
+		}
+		for _, tc := range msg.ToolCalls {
+			log.Printf("[llm] tool_call: %s(%s)", tc.Function.Name, tc.Function.Arguments)
+		}
+	}
+	log.Printf("[llm] ───────────────────────────────────────────")
 
 	return &chatResp, nil
 }

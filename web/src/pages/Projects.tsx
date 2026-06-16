@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   Server,
   Square,
+  Wrench,
 } from "lucide-react";
 import Markdown from "../components/Markdown";
 
@@ -25,10 +26,12 @@ import Markdown from "../components/Markdown";
 
 interface ChatMessage {
   id: string;
-  role: "user" | "agent" | "tool" | "choice";
+  role: "user" | "agent" | "tool" | "tool_call" | "choice";
   content: string;
   toolName?: string;
+  toolCallId?: string;
   toolStatus?: "running" | "success" | "error";
+  toolError?: string;
   choices?: { id: string; title: string }[];
   timestamp: Date;
 }
@@ -131,6 +134,7 @@ export default function Projects() {
           role: "tool",
           content: msg.payload?.description || "",
           toolName: msg.payload?.toolName,
+          toolCallId: msg.payload?.toolCallId,
           toolStatus: "running",
           timestamp: new Date(),
         });
@@ -139,12 +143,15 @@ export default function Projects() {
         setMessages((prev) =>
           prev.map((m) =>
             m.role === "tool" &&
-            m.toolName === msg.payload?.toolName &&
-            m.toolStatus === "running"
+            m.toolStatus === "running" &&
+            (msg.payload?.toolCallId
+              ? m.toolCallId === msg.payload.toolCallId
+              : m.toolName === msg.payload?.toolName)
               ? {
                   ...m,
                   toolStatus: msg.payload?.success ? "success" : "error",
                   content: msg.payload?.output || m.content,
+                  toolError: msg.payload?.error || undefined,
                 }
               : m
           )
@@ -265,6 +272,12 @@ export default function Projects() {
           let toolName = m.toolName;
           let toolStatus: "success" | "error" | undefined = undefined;
 
+          // Handle tool_call messages (stored arguments)
+          if (m.role === "tool_call") {
+            role = "tool_call";
+            content = m.content; // already formatted as "toolName(args)" by server
+          }
+
           // Handle tool messages
           if (m.role === "tool") {
             // ask_user messages should show as Q&A, not as tool bubbles
@@ -310,12 +323,39 @@ export default function Projects() {
             role,
             content,
             toolName,
+            toolCallId: m.toolCallId,
             toolStatus,
+            toolError: m.errorDetail || undefined,
             timestamp: new Date(),
           };
         })
         .filter(Boolean) as ChatMessage[];
-      setMessages(loaded.length > 0 ? loaded : [
+
+      // Merge adjacent tool_call + tool pairs into single "tool" messages
+      // (This makes history display identical to the live WebSocket flow where
+      //  tool_call creates a running tool, then tool_result updates it in place.)
+      const merged: ChatMessage[] = [];
+      for (let i = 0; i < loaded.length; i++) {
+        const curr = loaded[i];
+        if (curr.role === "tool_call" && i + 1 < loaded.length) {
+          const next = loaded[i + 1];
+          if (next.role === "tool" &&
+            (next.toolCallId ? next.toolCallId === curr.toolCallId : next.toolName === curr.toolName)) {
+            merged.push({
+              ...next,
+              id: curr.id,
+              content: next.content || curr.content || "",
+              toolCallId: next.toolCallId || (curr as any).toolCallId,
+              toolStatus: next.toolStatus || "success",
+            });
+            i++; // consume the tool result
+            continue;
+          }
+        }
+        merged.push(curr);
+      }
+
+      setMessages(merged.length > 0 ? merged : [
         {
           id: "welcome",
           role: "agent",
@@ -565,6 +605,26 @@ function MessageBubble({
               {msg.content.length > 500
                 ? msg.content.slice(0, 500) + "..."
                 : msg.content}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (msg.role === "tool_call") {
+    return (
+      <div className="flex gap-3 pl-2">
+        <div className="w-7 h-7 rounded-full bg-purple-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+          <Wrench className="w-3.5 h-3.5 text-purple-500" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] text-muted-foreground font-medium mb-1">
+            📞 Call: {msg.toolName}
+          </p>
+          <div className="bg-purple-500/5 border border-purple-500/20 rounded-lg px-3 py-2">
+            <p className="text-xs text-muted-foreground font-mono whitespace-pre-wrap break-all">
+              {msg.content}
             </p>
           </div>
         </div>

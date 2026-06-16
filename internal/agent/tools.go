@@ -98,7 +98,7 @@ func RegisterBuiltinTools(r *Registry, runtime *AgentRuntime) {
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "run_shell",
-				Description: "Execute a shell command LOCALLY only. Use for: ls, cat, node --version, npm --version. SSH/rsync/scp/sftp/sshpass are BLOCKED. Dangerous commands (rm, mv, sudo, brew, apt, pip install, chmod, chown, kill, etc.) are also BLOCKED — you MUST use ask_user first to get the user's explicit permission.",
+				Description: "Execute a shell command LOCALLY only. Use for: ls, cat, node --version, npm --version. SSH/rsync/scp/sftp/sshpass are BLOCKED. Dangerous commands (rm, mv, sudo, brew, apt, pip install, chmod, chown, kill, etc.) will automatically ask the user for confirmation — no need to call ask_user beforehand.",
 				Parameters: JSONSchema{
 					Type: "object",
 					Properties: map[string]JSONProp{
@@ -524,13 +524,55 @@ func RegisterBuiltinTools(r *Registry, runtime *AgentRuntime) {
 		Handler: runtime.ConfigureNginx,
 	})
 
+	// install_caddy
+	r.Register(Tool{
+		Def: ToolDef{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "install_caddy",
+				Description: "Install Caddy on the remote VPS. Use this when no web server is detected and the user wants Caddy. Caddy handles SSL automatically — no separate certbot step needed.",
+				Parameters: JSONSchema{
+					Type: "object",
+					Properties: map[string]JSONProp{
+						"serverId": {Type: "string", Description: "The server ID."},
+					},
+					Required: []string{"serverId"},
+				},
+			},
+		},
+		Handler: runtime.InstallCaddy,
+	})
+
+	// configure_caddy
+	r.Register(Tool{
+		Def: ToolDef{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "configure_caddy",
+				Description: "Create a Caddy virtual host configuration for the project and reload Caddy. Configures either static file serving or reverse proxy based on isStatic flag. SSL is automatic with Caddy.",
+				Parameters: JSONSchema{
+					Type: "object",
+					Properties: map[string]JSONProp{
+						"serverId":    {Type: "string", Description: "The server ID."},
+						"domain":      {Type: "string", Description: "The domain name for the vhost."},
+						"projectName": {Type: "string", Description: "The project name (used for config file naming and static root)."},
+						"port":        {Type: "number", Description: "The local port the app listens on (for reverse proxy mode)."},
+						"isStatic":    {Type: "boolean", Description: "If true, serves static files from /var/www/<projectName>. If false, reverse proxies to the given port."},
+					},
+					Required: []string{"serverId", "domain", "projectName", "isStatic"},
+				},
+			},
+		},
+		Handler: runtime.ConfigureCaddy,
+	})
+
 	// setup_ssl
 	r.Register(Tool{
 		Def: ToolDef{
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "setup_ssl",
-				Description: "Obtain an SSL certificate from Let's Encrypt using Certbot with the Nginx plugin.",
+				Description: "Obtain an SSL certificate from Let's Encrypt using Certbot with the Nginx plugin. For Caddy, SSL is automatic — skip this step.",
 				Parameters: JSONSchema{
 					Type: "object",
 					Properties: map[string]JSONProp{

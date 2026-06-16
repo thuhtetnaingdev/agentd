@@ -138,7 +138,16 @@ export const api = {
       id: string;
       projectId: string;
       name: string;
-      messages: { role: string; content: string }[];
+      messages: {
+        role: string;
+        content: string;
+        toolName?: string;
+        toolArgs?: string;
+        toolCallId?: string;
+        isError?: boolean;
+        errorDetail?: string;
+        timestamp: string;
+      }[];
     }>(`/sessions/${sessionId}?projectId=${encodeURIComponent(projectId)}`),
   deleteSession: (projectId: string, sessionId: string) =>
     request<void>(

@@ -21,8 +21,12 @@ func DeployViaSSH(client *SSHClient, localPath, remotePath string, exclude []str
 		}
 	}
 
-	// Ensure remote path exists
-	client.Run(fmt.Sprintf("mkdir -p %s", remotePath))
+	// Ensure remote path exists (try without sudo first, fall back to sudo)
+	if _, err := client.Run(fmt.Sprintf("mkdir -p %s", remotePath)); err != nil {
+		if _, sudoErr := client.Run(fmt.Sprintf("sudo mkdir -p %s", remotePath)); sudoErr != nil {
+			return "", fmt.Errorf("cannot create remote directory %s (mkdir: %v, sudo mkdir: %v)", remotePath, err, sudoErr)
+		}
+	}
 
 	session, err := client.client.NewSession()
 	if err != nil {
@@ -32,7 +36,9 @@ func DeployViaSSH(client *SSHClient, localPath, remotePath string, exclude []str
 
 	// Pipe tar.gz through SSH to remote extract
 	remoteCmd := fmt.Sprintf("tar xzf - -C %s", remotePath)
-	session.Stdout = &strings.Builder{}
+	var remoteOut, remoteErr strings.Builder
+	session.Stdout = &remoteOut
+	session.Stderr = &remoteErr
 
 	stdinPipe, err := session.StdinPipe()
 	if err != nil {
@@ -116,7 +122,19 @@ func DeployViaSSH(client *SSHClient, localPath, remotePath string, exclude []str
 	stdinPipe.Close()
 
 	if err := session.Wait(); err != nil {
-		return "", fmt.Errorf("remote extract failed: %w", err)
+		// Combine stdout + stderr for the full picture
+		remoteOutput := remoteOut.String()
+		if remoteErrStr := remoteErr.String(); remoteErrStr != "" {
+			if remoteOutput != "" {
+				remoteOutput += "\n" + remoteErrStr
+			} else {
+				remoteOutput = remoteErrStr
+			}
+		}
+		if remoteOutput == "" {
+			remoteOutput = err.Error()
+		}
+		return remoteOutput, fmt.Errorf("remote extract failed: %w", err)
 	}
 
 	return fmt.Sprintf("✓ Deployed %d files to %s", totalFiles, remotePath), nil

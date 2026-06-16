@@ -4,10 +4,12 @@ import { Send, Loader2, Bot, User, Wrench, Check, X, AlertTriangle, Square } fro
 
 interface ChatMessage {
   id: string;
-  role: "user" | "agent" | "tool" | "choice";
+  role: "user" | "agent" | "tool" | "tool_call" | "choice";
   content: string;
   toolName?: string;
+  toolCallId?: string;
   toolStatus?: "running" | "success" | "error";
+  toolError?: string;
   choices?: { id: string; title: string }[];
   timestamp: Date;
 }
@@ -51,6 +53,7 @@ export default function Chat({ projectId }: { projectId: string }) {
             role: "tool",
             content: msg.payload?.description || "",
             toolName: msg.payload?.toolName,
+            toolCallId: msg.payload?.toolCallId,
             toolStatus: "running",
             timestamp: new Date(),
           },
@@ -60,12 +63,15 @@ export default function Chat({ projectId }: { projectId: string }) {
         setMessages((prev) =>
           prev.map((m) =>
             m.role === "tool" &&
-            m.toolName === msg.payload?.toolName &&
-            m.toolStatus === "running"
+            m.toolStatus === "running" &&
+            (msg.payload?.toolCallId
+              ? m.toolCallId === msg.payload.toolCallId
+              : m.toolName === msg.payload?.toolName)
               ? {
                   ...m,
                   toolStatus: msg.payload?.success ? "success" : "error",
                   content: msg.payload?.output || m.content,
+                  toolError: msg.payload?.error || undefined,
                 }
               : m
           )
@@ -182,6 +188,11 @@ export default function Chat({ projectId }: { projectId: string }) {
                   )}
                 </div>
               )}
+              {msg.role === "tool_call" && (
+                <div className="w-7 h-7 rounded-md bg-purple-500/10 flex items-center justify-center">
+                  <Wrench className="w-3.5 h-3.5 text-purple-500" />
+                </div>
+              )}
               {msg.role === "choice" && (
                 <div className="w-7 h-7 rounded-md bg-blue-500/10 flex items-center justify-center">
                   <AlertTriangle className="w-3.5 h-3.5 text-blue-500" />
@@ -198,11 +209,22 @@ export default function Chat({ projectId }: { projectId: string }) {
                   ? "Agent"
                   : msg.role === "tool"
                   ? `Tool: ${msg.toolName}`
+                  : msg.role === "tool_call"
+                  ? `📞 Call: ${msg.toolName}`
                   : "Agent asks"}
+                {" · "}
+                {msg.timestamp.toLocaleTimeString()}
               </div>
               <div className="text-sm whitespace-pre-wrap break-words leading-relaxed">
                 {msg.content}
               </div>
+
+              {/* Error detail for failed tools */}
+              {msg.role === "tool" && msg.toolStatus === "error" && msg.toolError && (
+                <div className="mt-1 text-xs text-red-500 break-words bg-red-500/5 rounded p-2 border border-red-500/20">
+                  {msg.toolError}
+                </div>
+              )}
 
               {/* Choice buttons */}
               {msg.choices && msg.choices.length > 0 && (
