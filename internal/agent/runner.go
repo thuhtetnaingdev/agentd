@@ -162,7 +162,7 @@ func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 		// If the LLM wants to call tools
 		if len(msg.ToolCalls) > 0 {
 			// Send agent content first so live view matches what history will show
-			if msg.Content != "" {
+			if strings.TrimSpace(msg.Content) != "" {
 				r.logger.LogAgentMessage(msg.Content)
 			}
 

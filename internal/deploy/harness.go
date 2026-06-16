@@ -36,16 +36,24 @@ func validateNginx(client *SSHClient) (string, error) {
 
 func validateCaddy(client *SSHClient) (string, error) {
 	// Caddyfile path — check the common locations
-	out, err := client.Run("caddy validate --config /etc/caddy/Caddyfile 2>&1")
-	if err != nil {
-		// Try alternate path
-		out2, err2 := client.Run("caddy validate --config /etc/caddy/Caddyfile 2>&1")
-		if err2 != nil {
-			_ = out
-			return fmt.Sprintf("caddy config test FAILED:\n%s", out2), nil
-		}
+	paths := []string{
+		"/etc/caddy/Caddyfile",
+		"/etc/caddy/Caddyfile.json",
+		"/etc/caddy/Caddyfile.autosave.json",
 	}
-	return "", nil
+	for _, path := range paths {
+		out, err := client.Run(fmt.Sprintf("caddy validate --config %s 2>&1", path))
+		if err == nil {
+			return "", nil
+		}
+		// Continue to next path — this one failed or doesn't exist
+		_ = out
+	}
+	out, err := client.Run("caddy validate 2>&1")
+	if err == nil {
+		return "", nil
+	}
+	return fmt.Sprintf("caddy config test FAILED:\n%s", out), nil
 }
 
 func validateApache(client *SSHClient) (string, error) {
@@ -156,4 +164,50 @@ func CheckWebServerRunning(client *SSHClient, wsName string) (string, error) {
 		return fmt.Sprintf("⚠️  %s is installed but not running (systemctl status: %s)", wsName, strings.TrimSpace(out)), nil
 	}
 	return "", nil
+}
+
+// CheckRemoteServices verifies that critical services (nginx, caddy, pm2, docker)
+// that are installed are still running. Returns "" if all good, or warnings.
+func CheckRemoteServices(client *SSHClient) (string, error) {
+	var warnings []string
+	services := []string{"nginx", "caddy", "pm2", "docker"}
+	for _, svc := range services {
+		out, err := client.Run(fmt.Sprintf("systemctl is-active %s 2>&1 || true", svc))
+		if err != nil {
+			continue
+		}
+		out = strings.TrimSpace(out)
+		// Only warn if the service is known (installed) but not active
+		if out == "inactive" || out == "failed" {
+			warnings = append(warnings, fmt.Sprintf("⚠️  %s is installed but NOT running (status: %s)", svc, out))
+		}
+	}
+	if len(warnings) > 0 {
+		return strings.Join(warnings, "\n"), nil
+	}
+	return "", nil
+}
+
+// CheckHTTPResponse curls the deployed site's domain or IP and verifies it returns
+// a 2xx/3xx HTTP status. Returns "" if the site responds OK, or a warning.
+func CheckHTTPResponse(client *SSHClient, domain string, isStatic bool, projectName string) (string, error) {
+	url := fmt.Sprintf("http://%s", domain)
+	cmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --max-time 10 %s 2>&1", url)
+	out, err := client.Run(cmd)
+	if err != nil {
+		// Try with localhost
+		locCmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://localhost 2>&1")
+		out, _ = client.Run(locCmd)
+	}
+
+	code := strings.TrimSpace(out)
+	if code == "" {
+		return fmt.Sprintf("⚠️  Could not reach %s — no HTTP response", url), nil
+	}
+
+	if code == "200" || code == "301" || code == "302" || code == "304" || code == "307" || code == "308" {
+		return "", nil
+	}
+
+	return fmt.Sprintf("⚠️  %s returned HTTP %s (expected 200/301/302)", url, code), nil
 }

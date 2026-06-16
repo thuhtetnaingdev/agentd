@@ -659,6 +659,13 @@ func (rt *AgentRuntime) ConfigureNginx(ctx context.Context, args map[string]any)
 		output += fmt.Sprintf("\n\n⚠️  Post-check: %s", warn)
 	}
 
+	// Post-check: verify the site actually responds to HTTP
+	if domain != "" {
+		if warn, _ := deploy.CheckHTTPResponse(client, domain, isStatic, projectName); warn != "" {
+			output += fmt.Sprintf("\n\n%s", warn)
+		}
+	}
+
 	return &ToolResult{Success: true, Output: output}, nil
 }
 
@@ -742,6 +749,13 @@ func (rt *AgentRuntime) ConfigureCaddy(ctx context.Context, args map[string]any)
 		output += fmt.Sprintf("\n\n⚠️  Post-check: %s", warn)
 	}
 
+	// Post-check: verify the site actually responds to HTTP
+	if domain != "" {
+		if warn, _ := deploy.CheckHTTPResponse(client, domain, isStatic, projectName); warn != "" {
+			output += fmt.Sprintf("\n\n%s", warn)
+		}
+	}
+
 	return &ToolResult{Success: true, Output: output}, nil
 }
 
@@ -783,7 +797,7 @@ func (rt *AgentRuntime) RunSSH(ctx context.Context, args map[string]any) (*ToolR
 	}
 
 	// Post-check: verify critical services are still running
-	if warn, _ := checkRemoteServices(client); warn != "" {
+	if warn, _ := deploy.CheckRemoteServices(client); warn != "" {
 		output += fmt.Sprintf("\n\n%s", warn)
 	}
 
@@ -976,27 +990,6 @@ func (rt *AgentRuntime) TestConnection(ctx context.Context, args map[string]any)
 	return &ToolResult{Success: true, Output: fmt.Sprintf("Connection successful. Architecture: %s", arch)}, nil
 }
 
-// checkRemoteServices verifies that critical services (nginx, caddy, pm2, docker)
-// are still running on the remote server after a command. Returns warnings if any are down.
-func checkRemoteServices(client *deploy.SSHClient) (string, error) {
-	var warnings []string
-	services := []string{"nginx", "caddy", "pm2", "docker"}
-	for _, svc := range services {
-		out, err := client.Run(fmt.Sprintf("systemctl is-active %s 2>&1 || true", svc))
-		if err != nil {
-			continue
-		}
-		out = strings.TrimSpace(out)
-		// Only warn if the service is known (installed) but not active
-		if out == "inactive" || out == "failed" {
-			warnings = append(warnings, fmt.Sprintf("⚠️  %s is installed but NOT running (status: %s)", svc, out))
-		}
-	}
-	if len(warnings) > 0 {
-		return strings.Join(warnings, "\n"), nil
-	}
-	return "", nil
-}
 
 // AgentLogger adapts log for the agent session.
 type AgentLogger struct {
@@ -1029,8 +1022,8 @@ func (l *AgentLogger) LogToolResult(name string, result *ToolResult, toolCallID 
 }
 
 func (l *AgentLogger) LogAgentMessage(content string) {
-	if content == "" {
-		return // skip empty bubbles
+	if strings.TrimSpace(content) == "" {
+		return // skip empty bubbles (including whitespace-only like "\n")
 	}
 	l.Session.SendJSON(map[string]any{
 		"type": "agent_message",
