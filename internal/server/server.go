@@ -18,33 +18,36 @@ var webDist embed.FS
 
 // Options configures the server.
 type Options struct {
-	Port         int
-	WorkDir      string
-	Config       *config.Config
-	SessionStore *store.SessionStore
-	EnvStore     *config.EnvStore
+	Port            int
+	WorkDir         string
+	Config          *config.Config
+	SessionStore    *store.SessionStore
+	DeploymentStore *store.DeploymentStore
+	EnvStore        *config.EnvStore
 }
 
 // Server is the HTTP+WebSocket server.
 type Server struct {
-	opts         Options
-	http         *http.Server
-	mux          *http.ServeMux
-	hub          *Hub
-	sessionStore *store.SessionStore
-	envStore     *config.EnvStore
+	opts            Options
+	http            *http.Server
+	mux             *http.ServeMux
+	hub             *Hub
+	sessionStore    *store.SessionStore
+	deploymentStore *store.DeploymentStore
+	envStore        *config.EnvStore
 }
 
 // New creates a new Server.
 func New(opts Options) (*Server, error) {
 	s := &Server{
-		opts:         opts,
-		mux:          http.NewServeMux(),
-		hub:          newHub(),
-		sessionStore: opts.SessionStore,
-		envStore:     opts.EnvStore,
+		opts:            opts,
+		mux:             http.NewServeMux(),
+		hub:             newHub(),
+		sessionStore:    opts.SessionStore,
+		deploymentStore: opts.DeploymentStore,
+		envStore:        opts.EnvStore,
 	}
-	s.hub.SetConfig(opts.WorkDir, opts.Config, opts.SessionStore, opts.EnvStore)
+	s.hub.SetConfig(opts.WorkDir, opts.Config, opts.SessionStore, opts.DeploymentStore, opts.EnvStore)
 
 	s.routes()
 

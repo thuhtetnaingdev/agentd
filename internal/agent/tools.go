@@ -586,6 +586,50 @@ func RegisterBuiltinTools(r *Registry, runtime *AgentRuntime) {
 		},
 		Handler: runtime.SetupSSL,
 	})
+
+	// record_deployment
+	r.Register(Tool{
+		Def: ToolDef{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "record_deployment",
+				Description: "Record a deployment in the deployment history. Call this AFTER a successful (or failed) deployment is complete. It saves the project name, server, port, domain, and status. If successful and a port is provided, an immediate health check is run.",
+				Parameters: JSONSchema{
+					Type: "object",
+					Properties: map[string]JSONProp{
+						"serverId":    {Type: "string", Description: "The server ID the project was deployed to."},
+						"projectName": {Type: "string", Description: "The project name (directory name) that was deployed."},
+						"status":      {Type: "string", Description: "'success' or 'failed'."},
+						"port":        {Type: "number", Description: "The port the application is running on (e.g. 3000)."},
+						"domain":      {Type: "string", Description: "The domain configured (if any)."},
+						"error":       {Type: "string", Description: "Error message if the deployment failed."},
+					},
+					Required: []string{"serverId", "projectName", "status"},
+				},
+			},
+		},
+		Handler: runtime.RecordDeployment,
+	})
+
+	// check_deployment_health
+	r.Register(Tool{
+		Def: ToolDef{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "check_deployment_health",
+				Description: "Check the health of a previously deployed project by curling localhost:PORT on the remote server. Returns whether the service is responding.",
+				Parameters: JSONSchema{
+					Type: "object",
+					Properties: map[string]JSONProp{
+						"deploymentId": {Type: "string", Description: "The deployment ID to check. Leave empty to check the latest deployment."},
+						"projectName":  {Type: "string", Description: "The project name to check (used if deploymentId is empty)."},
+						"port":         {Type: "number", Description: "Override the port to check (defaults to the port from the deployment record)."},
+					},
+				},
+			},
+		},
+		Handler: runtime.CheckDeploymentHealth,
+	})
 }
 
 // parseToolArgs parses JSON string arguments into a map.

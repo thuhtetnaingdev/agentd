@@ -113,17 +113,20 @@ func run(cmd *cobra.Command, args []string) error {
 	sessionsDir := filepath.Join(wd, ".agentd", "sessions")
 	sessionStore := store.NewSessionStore(sessionsDir)
 
+	deploymentStore := store.NewDeploymentStore(wd)
+
 	envStore, err := config.NewEnvStore(wd, cfg.Settings().EncryptKey)
 	if err != nil {
 		return fmt.Errorf("create env store: %w", err)
 	}
 
 	srv, err := server.New(server.Options{
-		Port:         port,
-		WorkDir:      wd,
-		Config:       cfg,
-		SessionStore: sessionStore,
-		EnvStore:     envStore,
+		Port:            port,
+		WorkDir:         wd,
+		Config:          cfg,
+		SessionStore:    sessionStore,
+		DeploymentStore: deploymentStore,
+		EnvStore:        envStore,
 	})
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)

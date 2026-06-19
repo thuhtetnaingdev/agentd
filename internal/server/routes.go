@@ -2,10 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"agentd/internal/config"
+	"agentd/internal/deploy"
 	"agentd/internal/project"
 	"agentd/internal/store"
 )
@@ -44,6 +48,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/env", s.handleListEnv)
 	s.mux.HandleFunc("PUT /api/env", s.handlePutEnv)
 	s.mux.HandleFunc("DELETE /api/env/{key}", s.handleDeleteEnv)
+
+	// Deployments
+	s.mux.HandleFunc("GET /api/deployments", s.handleListDeployments)
+	s.mux.HandleFunc("GET /api/deployments/{id}", s.handleGetDeployment)
+	s.mux.HandleFunc("GET /api/deployments/{id}/health", s.handleDeploymentHealth)
+	s.mux.HandleFunc("DELETE /api/deployments/{id}", s.handleDeleteDeployment)
 
 	// Agent chat (WebSocket)
 	s.mux.HandleFunc("/api/ws", s.hub.handleWS)
@@ -155,12 +165,20 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	projects, _ := project.Scan(s.opts.WorkDir)
 	hasAPIKey := s.opts.Config.Settings().APIKey != ""
 
+	deploymentCount := 0
+	if s.deploymentStore != nil {
+		if recs, err := s.deploymentStore.List(); err == nil {
+			deploymentCount = len(recs)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"serverCount":  len(servers),
-		"projectCount": len(projects),
-		"hasAPIKey":    hasAPIKey,
-		"workDir":      s.opts.WorkDir,
+		"serverCount":      len(servers),
+		"projectCount":     len(projects),
+		"deploymentCount":  deploymentCount,
+		"hasAPIKey":        hasAPIKey,
+		"workDir":          s.opts.WorkDir,
 	})
 }
 
@@ -313,4 +331,118 @@ func (s *Server) handleDeleteEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Deployment handlers ---
+
+func (s *Server) handleListDeployments(w http.ResponseWriter, r *http.Request) {
+	if s.deploymentStore == nil {
+		json.NewEncoder(w).Encode([]any{})
+		return
+	}
+	recs, err := s.deploymentStore.List()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(recs)
+}
+
+func (s *Server) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.deploymentStore == nil {
+		http.Error(w, "deployment store not available", http.StatusInternalServerError)
+		return
+	}
+	rec, err := s.deploymentStore.Get(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rec)
+}
+
+func (s *Server) handleDeploymentHealth(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.deploymentStore == nil {
+		http.Error(w, "deployment store not available", http.StatusInternalServerError)
+		return
+	}
+
+	rec, err := s.deploymentStore.Get(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Find the server to SSH into
+	srv, ok := s.opts.Config.GetServer(rec.ServerID)
+	if !ok {
+		http.Error(w, fmt.Sprintf("server %s not found", rec.ServerID), http.StatusNotFound)
+		return
+	}
+
+	port := rec.Port
+	if port == 0 {
+		port = 3000
+	}
+
+	client := deploy.NewSSHClient(srv.Host, srv.Port, srv.Username, srv.Password)
+	defer client.Close()
+
+	healthStatus := "healthy"
+	output, err := runHealthCheckAPI(client, port)
+	if err != nil || !strings.Contains(output, "PORT_OK") {
+		healthStatus = "unhealthy"
+	}
+
+	s.deploymentStore.UpdateHealth(rec.ID, healthStatus, time.Now())
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":           rec.ID,
+		"projectName":  rec.ProjectName,
+		"host":         rec.Host,
+		"port":         port,
+		"healthStatus": healthStatus,
+		"lastChecked":  time.Now(),
+		"output":       output,
+	})
+}
+
+func (s *Server) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.deploymentStore == nil {
+		http.Error(w, "deployment store not available", http.StatusInternalServerError)
+		return
+	}
+	if err := s.deploymentStore.Delete(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// runHealthCheckAPI performs an HTTP health check via SSH on the given port.
+func runHealthCheckAPI(client *deploy.SSHClient, port int) (string, error) {
+	// Try curl first
+	cmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://localhost:%d 2>&1 || echo 'CURL_FAILED'", port)
+	output, err := client.Run(cmd)
+	if err == nil && !strings.Contains(output, "CURL_FAILED") && output != "" {
+		status := strings.TrimSpace(output)
+		if status >= "200" && status < "500" {
+			return fmt.Sprintf("HTTP %s on port %d — PORT_OK", status, port), nil
+		}
+		return fmt.Sprintf("HTTP %s on port %d", status, port), nil
+	}
+
+	// Fallback: check if port is listening
+	checkCmd := fmt.Sprintf("ss -tlnp | grep -q ':%d ' && echo 'LISTENING' || echo 'NOT_LISTENING'", port)
+	checkOut, _ := client.Run(checkCmd)
+	if strings.Contains(checkOut, "LISTENING") {
+		return fmt.Sprintf("Port %d is LISTENING — PORT_OK", port), nil
+	}
+	return fmt.Sprintf("Port %d is NOT_LISTENING", port), nil
 }

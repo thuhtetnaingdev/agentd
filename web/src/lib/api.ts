@@ -167,4 +167,48 @@ export const api = {
     request<void>(`/env/${encodeURIComponent(key)}`, {
       method: "DELETE",
     }),
+
+  // Deployments
+  listDeployments: () =>
+    request<
+      {
+        id: string;
+        projectName: string;
+        serverName: string;
+        host: string;
+        port: number;
+        domain: string;
+        status: string;
+        healthStatus: string;
+        deployedAt: string;
+        lastChecked: string;
+        error: string;
+      }[]
+    >("/deployments"),
+  getDeployment: (id: string) =>
+    request<{
+      id: string;
+      projectName: string;
+      serverName: string;
+      host: string;
+      port: number;
+      domain: string;
+      status: string;
+      healthStatus: string;
+      deployedAt: string;
+      lastChecked: string;
+      error: string;
+    }>(`/deployments/${id}`),
+  checkDeploymentHealth: (id: string) =>
+    request<{
+      id: string;
+      projectName: string;
+      host: string;
+      port: number;
+      healthStatus: string;
+      lastChecked: string;
+      output: string;
+    }>(`/deployments/${id}/health`),
+  deleteDeployment: (id: string) =>
+    request<void>(`/deployments/${id}`, { method: "DELETE" }),
 };

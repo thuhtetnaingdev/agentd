@@ -31,12 +31,13 @@ type WSMessage struct {
 
 // Hub manages WebSocket connections per session.
 type Hub struct {
-	sessions     map[string]*Session
-	mu           sync.RWMutex
-	workDir      string
-	cfg          *config.Config
-	sessionStore *store.SessionStore
-	envStore     *config.EnvStore
+	sessions        map[string]*Session
+	mu              sync.RWMutex
+	workDir         string
+	cfg             *config.Config
+	sessionStore    *store.SessionStore
+	deploymentStore *store.DeploymentStore
+	envStore        *config.EnvStore
 }
 
 // Session is a single chat session (one project).
@@ -68,10 +69,11 @@ func newHub() *Hub {
 	}
 }
 
-func (h *Hub) SetConfig(workDir string, cfg *config.Config, sessionStore *store.SessionStore, envStore *config.EnvStore) {
+func (h *Hub) SetConfig(workDir string, cfg *config.Config, sessionStore *store.SessionStore, deploymentStore *store.DeploymentStore, envStore *config.EnvStore) {
 	h.workDir = workDir
 	h.cfg = cfg
 	h.sessionStore = sessionStore
+	h.deploymentStore = deploymentStore
 	h.envStore = envStore
 }
 
@@ -120,6 +122,7 @@ func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		runtime := &agent.AgentRuntime{
 			WorkDir:         h.workDir,
 			Config:          h.cfg,
+			DeploymentStore: h.deploymentStore,
 			EnvStore:        h.envStore,
 			Session:         s,
 			DefaultServerID: s.SelectedServerID,
@@ -275,6 +278,7 @@ func (s *Session) handleChat(msg WSMessage) {
 			runtime := &agent.AgentRuntime{
 				WorkDir:         s.hub.workDir,
 				Config:          s.hub.cfg,
+				DeploymentStore: s.hub.deploymentStore,
 				EnvStore:        s.hub.envStore,
 				Session:         s,
 				DefaultServerID: s.SelectedServerID,

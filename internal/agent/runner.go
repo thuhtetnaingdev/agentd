@@ -54,6 +54,7 @@ When a user asks to deploy, follow this exact process:
 11. **Check web server**: Use check_web_server. If 'none', ask the user whether to install Nginx or Caddy. If nginx/caddy exists, integrate with the existing setup.
 12. **Configure domain**: Use configure_nginx or configure_caddy with the domain. For static sites set isStatic=true. For backend apps set isStatic=false with the port.
 13. **SSL**: For Nginx: use setup_ssl to obtain a Let's Encrypt certificate. For Caddy: SSL is automatic — no extra step needed.
+14. **Record deployment**: After a successful (or failed) deployment, use record_deployment to save the deployment in the history. Include the project name, server, port, domain (if any), and status. This shows up in the Dashboard.
 
 ## Package Managers
 - Node.js projects: detect the package manager from lock files:

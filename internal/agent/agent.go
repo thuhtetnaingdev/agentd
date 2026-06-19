@@ -14,12 +14,14 @@ import (
 	"agentd/internal/config"
 	"agentd/internal/deploy"
 	"agentd/internal/project"
+	"agentd/internal/store"
 )
 
 // AgentRuntime provides the execution context for built-in tools.
 type AgentRuntime struct {
 	WorkDir         string
 	Config          *config.Config
+	DeploymentStore *store.DeploymentStore
 	EnvStore        *config.EnvStore
 	Session         Session
 	DefaultServerID string // set from UI server selector
@@ -1005,6 +1007,164 @@ func (rt *AgentRuntime) TestConnection(ctx context.Context, args map[string]any)
 	return &ToolResult{Success: true, Output: fmt.Sprintf("Connection successful. Architecture: %s", arch)}, nil
 }
 
+
+func (rt *AgentRuntime) RecordDeployment(ctx context.Context, args map[string]any) (*ToolResult, error) {
+	projectName, _ := args["projectName"].(string)
+	status, _ := args["status"].(string) // "success" or "failed"
+	port := 0
+	if p, ok := args["port"].(float64); ok {
+		port = int(p)
+	}
+	domain, _ := args["domain"].(string)
+	errMsg, _ := args["error"].(string)
+
+	if projectName == "" {
+		return &ToolResult{Success: false, Error: "projectName is required"}, nil
+	}
+	if status == "" {
+		status = "success"
+	}
+
+	// Resolve server info
+	serverID := rt.resolveServerID(args)
+	serverName := serverID
+	host := ""
+	if srv, ok := rt.Config.GetServer(serverID); ok {
+		serverName = srv.Name
+		host = srv.Host
+	}
+
+	if rt.DeploymentStore == nil {
+		return &ToolResult{Success: false, Error: "deployment store not available"}, nil
+	}
+
+	// If projectName is ".", use the workdir basename
+	if projectName == "." {
+		projectName = filepath.Base(rt.WorkDir)
+	}
+
+	rec := store.DeploymentRecord{
+		ProjectName:  projectName,
+		ServerID:     serverID,
+		ServerName:   serverName,
+		Host:         host,
+		Port:         port,
+		Domain:       domain,
+		Status:       status,
+		HealthStatus: "unknown",
+		DeployedAt:   time.Now(),
+		Error:        errMsg,
+	}
+
+	created, err := rt.DeploymentStore.Create(rec)
+	if err != nil {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("save deployment: %v", err)}, nil
+	}
+
+	// If status is success, immediately run a health check
+	if status == "success" && host != "" && port > 0 {
+		if srv, ok := rt.Config.GetServer(serverID); ok {
+			client := deploy.NewSSHClient(host, srv.Port, srv.Username, srv.Password)
+
+			healthStatus := "healthy"
+			checkOutput, err := runHealthCheck(client, port)
+			client.Close()
+			if err != nil || !strings.Contains(checkOutput, "PORT_OK") {
+				healthStatus = "unhealthy"
+			}
+			rt.DeploymentStore.UpdateHealth(created.ID, healthStatus, time.Now())
+			created.HealthStatus = healthStatus
+			created.LastChecked = time.Now()
+		}
+	}
+
+	data, _ := json.MarshalIndent(created, "", "  ")
+	return &ToolResult{Success: true, Output: fmt.Sprintf("✓ Deployment recorded:\n%s", string(data))}, nil
+}
+
+func (rt *AgentRuntime) CheckDeploymentHealth(ctx context.Context, args map[string]any) (*ToolResult, error) {
+	deploymentID, _ := args["deploymentId"].(string)
+	projectName, _ := args["projectName"].(string)
+	port := 0
+	if p, ok := args["port"].(float64); ok {
+		port = int(p)
+	}
+
+	if rt.DeploymentStore == nil {
+		return &ToolResult{Success: false, Error: "deployment store not available"}, nil
+	}
+
+	var rec *store.DeploymentRecord
+	var err error
+
+	if deploymentID != "" {
+		rec, err = rt.DeploymentStore.Get(deploymentID)
+	} else {
+		// Find the most recent deployment for this project
+		all, listErr := rt.DeploymentStore.List()
+		if listErr != nil {
+			return &ToolResult{Success: false, Error: fmt.Sprintf("list deployments: %v", listErr)}, nil
+		}
+		for i := range all {
+			if all[i].ProjectName == projectName || (projectName == "" && i == 0) {
+				rec = &all[i]
+				break
+			}
+		}
+	}
+
+	if err != nil || rec == nil {
+		return &ToolResult{Success: false, Output: "No matching deployment found."}, nil
+	}
+
+	// Resolve server from the deployment record
+	srv, ok := rt.Config.GetServer(rec.ServerID)
+	if !ok {
+		return &ToolResult{Success: false, Error: fmt.Sprintf("server %s not found", rec.ServerID)}, nil
+	}
+
+	if port == 0 {
+		port = rec.Port
+	}
+	if port == 0 {
+		port = 3000 // default
+	}
+
+	client := deploy.NewSSHClient(srv.Host, srv.Port, srv.Username, srv.Password)
+	defer client.Close()
+
+	healthStatus := "healthy"
+	output, err := runHealthCheck(client, port)
+	if err != nil || !strings.Contains(output, "PORT_OK") {
+		healthStatus = "unhealthy"
+	}
+
+	rt.DeploymentStore.UpdateHealth(rec.ID, healthStatus, time.Now())
+
+	return &ToolResult{Success: true, Output: fmt.Sprintf("Deployment %s (%s:%d): health = %s\n%s", rec.ProjectName, rec.Host, port, healthStatus, output)}, nil
+}
+
+// runHealthCheck performs an HTTP health check via SSH on the given port.
+func runHealthCheck(client *deploy.SSHClient, port int) (string, error) {
+	// Try curl first, then fall back to checking if the port is listening
+	cmd := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://localhost:%d 2>&1 || echo 'CURL_FAILED'", port)
+	output, err := client.Run(cmd)
+	if err == nil && !strings.Contains(output, "CURL_FAILED") && output != "" {
+		status := strings.TrimSpace(output)
+		if status >= "200" && status < "500" {
+			return fmt.Sprintf("HTTP %s on port %d — PORT_OK", status, port), nil
+		}
+		return fmt.Sprintf("HTTP %s on port %d", status, port), nil
+	}
+
+	// Fallback: check if port is listening (ss/telnet)
+	checkCmd := fmt.Sprintf("ss -tlnp | grep -q ':%d ' && echo 'LISTENING' || echo 'NOT_LISTENING'", port)
+	checkOut, _ := client.Run(checkCmd)
+	if strings.Contains(checkOut, "LISTENING") {
+		return fmt.Sprintf("Port %d is LISTENING — PORT_OK", port), nil
+	}
+	return fmt.Sprintf("Port %d is NOT_LISTENING", port), nil
+}
 
 // AgentLogger adapts log for the agent session.
 type AgentLogger struct {
