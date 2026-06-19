@@ -242,32 +242,24 @@ func (s *Session) handleChat(msg WSMessage) {
 		s.sessionID = payload.SessionID
 	}
 
-	// Load previous messages into the runner so the LLM has full conversation context
+	// Load previous messages into the runner so the LLM has full conversation context.
+	// Only reload from store if the runner has fewer messages (page refresh / new connection).
+	// If the runner already has accumulated messages from this session, skip the reload
+	// to preserve the live byte-identical message history (critical for prompt cache).
 	if s.sessionID != "" && s.hub.sessionStore != nil && s.runner != nil {
 		pid := s.ProjectID
 		if pid == "" {
 			pid = filepath.Base(s.hub.workDir)
 		}
-		swm, err := s.hub.sessionStore.Get(pid, s.sessionID)
-		if err == nil && len(swm.Messages) > 0 {
-			var history []agent.ChatMessage
-			for _, m := range swm.Messages {
-				// Only include user and agent messages for LLM context.
-				// Tool messages require tool_call_id which isn't stored;
-				// their results are already reflected in the agent's responses.
-				if m.Role != "user" && m.Role != "agent" {
-					continue
-				}
-				role := m.Role
-				if role == "agent" {
-					role = "assistant" // LLM expects "assistant"
-				}
-				history = append(history, agent.ChatMessage{
-					Role:    role,
-					Content: m.Content,
-				})
+		// Check if runner already has messages beyond the system prompt
+		runnerMsgs := s.runner.GetMessages()
+		needsReload := len(runnerMsgs) <= 1 // only system prompt = needs reload
+		if needsReload {
+			swm, err := s.hub.sessionStore.Get(pid, s.sessionID)
+			if err == nil && len(swm.Messages) > 0 {
+				history := BuildAgentMessages(swm.Messages)
+				s.runner.SetMessages(history)
 			}
-			s.runner.SetMessages(history)
 		}
 	}
 
@@ -365,6 +357,128 @@ func (s *Session) handleChoiceResponse(msg WSMessage) {
 	case s.choiceCh <- payload.ChoiceID:
 	default:
 	}
+}
+
+// BuildAgentMessages converts stored store.Message back to agent.ChatMessage format.
+// This is the inverse of BuildStoreMessages — it reconstructs the full message
+// history including tool calls and tool results so the LLM gets byte-identical
+// context, which is critical for DeepSeek's prefix-based prompt cache.
+//
+// The store interleaves tool_call entries with their tool results:
+//   user → agent → tool_call(tc1) → tool(r1) → tool_call(tc2) → tool(r2) → ...
+// This function groups consecutive tool_call+tool pairs back into a single
+// assistant message with multiple ToolCalls followed by tool result messages.
+func BuildAgentMessages(msgs []store.Message) []agent.ChatMessage {
+	var out []agent.ChatMessage
+
+	// Build a map of tool results by ToolCallID for quick lookup
+	toolResults := map[string]string{}
+	toolNames := map[string]string{}
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			toolResults[m.ToolCallID] = m.Content
+			toolNames[m.ToolCallID] = m.ToolName
+		}
+	}
+
+	for i := 0; i < len(msgs); i++ {
+		m := msgs[i]
+
+		switch m.Role {
+		case "user":
+			out = append(out, agent.ChatMessage{Role: "user", Content: m.Content})
+
+		case "agent":
+			content := m.Content
+			i++
+
+			// Check if the NEXT messages are tool_call entries from the
+			// same assistant turn. If so, merge them into one assistant
+			// message with ToolCalls.
+			var toolCallIDs []string
+			for i < len(msgs) && msgs[i].Role == "tool_call" {
+				tc := msgs[i]
+				toolCallIDs = append(toolCallIDs, tc.ToolCallID)
+				i++
+				// Consume the matching tool result (stored immediately after the tool_call)
+				if i < len(msgs) && msgs[i].Role == "tool" {
+					i++
+				}
+			}
+
+			if len(toolCallIDs) > 0 {
+				// Build tool calls and tool results
+				toolCalls := make([]agent.ToolCall, 0, len(toolCallIDs))
+				for _, tcID := range toolCallIDs {
+					// Re-find the tool_call message from earlier
+					for _, orig := range msgs {
+						if orig.ToolCallID == tcID && orig.Role == "tool_call" {
+							toolCalls = append(toolCalls, agent.ToolCall{
+								ID:   tcID,
+								Type: "function",
+								Function: agent.FunctionCall{
+									Name:      orig.ToolName,
+									Arguments: orig.ToolArgs,
+								},
+							})
+							break
+						}
+					}
+				}
+				out = append(out, agent.ChatMessage{
+					Role:      "assistant",
+					Content:   content,
+					ToolCalls: toolCalls,
+				})
+				// Append tool results in the same order
+				for _, tcID := range toolCallIDs {
+					resultContent := toolResults[tcID]
+					name := toolNames[tcID]
+					if resultContent == "" {
+						resultContent = `{"success":false,"output":"","error":"no result stored"}`
+					}
+					out = append(out, agent.ChatMessage{
+						Role:       "tool",
+						ToolCallID: tcID,
+						Name:       name,
+						Content:    resultContent,
+					})
+				}
+			} else {
+				// Plain agent message without tool calls
+				out = append(out, agent.ChatMessage{Role: "assistant", Content: content})
+			}
+			// Loop already advanced past tool_call+tool pairs; continue without i++
+			continue
+
+		case "tool":
+			// Orphan tool result — shouldn't happen in a well-formed store,
+			// but include it anyway (SanitizeToolPairing will handle it)
+			out = append(out, agent.ChatMessage{
+				Role:       "tool",
+				ToolCallID: m.ToolCallID,
+				Name:       m.ToolName,
+				Content:    m.Content,
+			})
+
+		case "tool_call":
+			// Orphan tool_call — will be handled by SanitizeToolPairing
+			// which backfills a placeholder result
+			out = append(out, agent.ChatMessage{
+				Role:      "assistant",
+				ToolCalls: []agent.ToolCall{{
+					ID:   m.ToolCallID,
+					Type: "function",
+					Function: agent.FunctionCall{
+						Name:      m.ToolName,
+						Arguments: m.ToolArgs,
+					},
+				}},
+			})
+		}
+	}
+
+	return out
 }
 
 // BuildStoreMessages converts agent ChatMessages to store.Message format,
