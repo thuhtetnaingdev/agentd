@@ -94,6 +94,24 @@ When a user asks to deploy, follow this exact process:
 - If something fails, explain what went wrong and suggest next steps
 - The user may not have a domain yet — if they don't, configure with the server IP as the server_name`
 
+// SessionUsage tracks cumulative token usage for a session.
+type SessionUsage struct {
+	PromptTokens     int `json:"promptTokens"`
+	CompletionTokens int `json:"completionTokens"`
+	TotalTokens      int `json:"totalTokens"`
+	CacheHitTokens   int `json:"cacheHitTokens"`
+	CacheMissTokens  int `json:"cacheMissTokens"`
+}
+
+// CacheHitRate returns the cache hit percentage (0-100).
+func (u *SessionUsage) CacheHitRate() float64 {
+	total := u.CacheHitTokens + u.CacheMissTokens
+	if total == 0 {
+		return 0
+	}
+	return float64(u.CacheHitTokens) / float64(total) * 100
+}
+
 // AgentRunner manages the agent conversation loop.
 type AgentRunner struct {
 	client   *Client
@@ -101,6 +119,7 @@ type AgentRunner struct {
 	runtime  *AgentRuntime
 	logger   *AgentLogger
 	messages []ChatMessage
+	usage    SessionUsage
 }
 
 // NewAgentRunner creates a new agent runner with the given API key, base URL, and model.
@@ -156,6 +175,16 @@ func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 			r.logger.LogError(fmt.Errorf("LLM call failed: %w", err))
 			return err
 		}
+
+		// Accumulate usage
+		if resp.Usage != nil {
+			r.usage.PromptTokens += resp.Usage.PromptTokens
+			r.usage.CompletionTokens += resp.Usage.CompletionTokens
+			r.usage.TotalTokens += resp.Usage.TotalTokens
+			r.usage.CacheHitTokens += resp.Usage.PromptCacheHitTokens
+			r.usage.CacheMissTokens += resp.Usage.PromptCacheMissTokens
+		}
+		r.logger.LogUsage(r.usage)
 
 		if len(resp.Choices) == 0 {
 			r.logger.LogError(fmt.Errorf("no choices in response"))
@@ -254,6 +283,16 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 			r.logger.LogError(fmt.Errorf("LLM call failed: %w", err))
 			return err
 		}
+
+		// Accumulate usage
+		if resp.Usage != nil {
+			r.usage.PromptTokens += resp.Usage.PromptTokens
+			r.usage.CompletionTokens += resp.Usage.CompletionTokens
+			r.usage.TotalTokens += resp.Usage.TotalTokens
+			r.usage.CacheHitTokens += resp.Usage.PromptCacheHitTokens
+			r.usage.CacheMissTokens += resp.Usage.PromptCacheMissTokens
+		}
+		r.logger.LogUsage(r.usage)
 
 		if len(resp.Choices) == 0 {
 			return fmt.Errorf("no response from LLM")

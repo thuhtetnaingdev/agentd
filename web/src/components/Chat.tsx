@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useWebSocket, WSMessage } from "../hooks/useWebSocket";
-import { Send, Loader2, Bot, User, Wrench, Check, X, AlertTriangle, Square } from "lucide-react";
+import { Send, Loader2, Bot, User, Wrench, Check, X, AlertTriangle, Square, BrainCircuit } from "lucide-react";
 
 interface ChatMessage {
   id: string;
@@ -12,6 +12,15 @@ interface ChatMessage {
   toolError?: string;
   choices?: { id: string; title: string }[];
   timestamp: Date;
+}
+
+interface UsageStats {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  cacheHitRate: number;
 }
 
 export default function Chat({ projectId }: { projectId: string }) {
@@ -26,6 +35,7 @@ export default function Chat({ projectId }: { projectId: string }) {
   ]);
   const [input, setInput] = useState("");
   const [agentThinking, setAgentThinking] = useState(false);
+  const [usage, setUsage] = useState<UsageStats | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const handleMessage = (msg: WSMessage) => {
@@ -113,6 +123,9 @@ export default function Chat({ projectId }: { projectId: string }) {
           },
         ]);
         break;
+      case "usage_update":
+        setUsage(msg.payload);
+        break;
     }
   };
 
@@ -157,6 +170,12 @@ export default function Chat({ projectId }: { projectId: string }) {
   const handleCancel = () => {
     send({ type: "cancel", payload: {} });
     setAgentThinking(false);
+  };
+
+  const fmtTokens = (n: number) => {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+    if (n >= 1_000) return (n / 1_000).toFixed(0) + "k";
+    return String(n);
   };
 
   return (
@@ -256,6 +275,33 @@ export default function Chat({ projectId }: { projectId: string }) {
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Usage footer */}
+      {usage && (
+        <div className="border-t border-border px-4 py-1.5 flex items-center gap-3 text-[11px] text-muted-foreground font-mono">
+          <BrainCircuit className="w-3 h-3 flex-shrink-0" />
+          <span title={`Prompt tokens: ${usage.promptTokens.toLocaleString()}`}>
+            ↑{fmtTokens(usage.promptTokens)}
+          </span>
+          <span title={`Completion tokens: ${usage.completionTokens.toLocaleString()}`}>
+            ↓{fmtTokens(usage.completionTokens)}
+          </span>
+          <span title={`Total tokens: ${usage.totalTokens.toLocaleString()}`}>
+            R{fmtTokens(usage.totalTokens)}
+          </span>
+          <span
+            title={`Cache hit: ${usage.cacheHitTokens.toLocaleString()} · Cache miss: ${usage.cacheMissTokens.toLocaleString()}`}
+            className={usage.cacheHitRate >= 90 ? "text-green-500" : usage.cacheHitRate >= 50 ? "text-yellow-500" : "text-red-500"}
+          >
+            CH{usage.cacheHitRate.toFixed(1)}%
+          </span>
+          {usage.totalTokens > 0 && (
+            <span className="text-muted-foreground/60">
+              (auto)
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Input */}
       <div className="border-t border-border p-4">

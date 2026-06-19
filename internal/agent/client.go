@@ -13,6 +13,16 @@ import (
 
 // --- API Types ---
 
+// UsageData captures token usage from LLM API responses.
+type UsageData struct {
+	PromptTokens     int `json:"prompt_tokens,omitempty"`
+	CompletionTokens int `json:"completion_tokens,omitempty"`
+	TotalTokens      int `json:"total_tokens,omitempty"`
+	// Cache hit/miss (DeepSeek, some other providers)
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`
+}
+
 type ChatMessage struct {
 	Role       string      `json:"role"`
 	Content    string      `json:"content,omitempty"`
@@ -68,6 +78,7 @@ type ChatResponse struct {
 		Message      ChatMessage `json:"message"`
 		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *UsageData `json:"usage,omitempty"`
 }
 
 type StreamChunk struct {
@@ -79,6 +90,7 @@ type StreamChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *UsageData `json:"usage,omitempty"`
 }
 
 // --- Client ---
@@ -174,6 +186,16 @@ func (c *Client) Chat(messages []ChatMessage, tools []ToolDef) (*ChatResponse, e
 		for _, tc := range msg.ToolCalls {
 			log.Printf("[llm] tool_call: %s(%s)", tc.Function.Name, tc.Function.Arguments)
 		}
+	}
+	if chatResp.Usage != nil {
+		u := chatResp.Usage
+		hitRate := 0.0
+		if u.PromptTokens > 0 {
+			hitRate = float64(u.PromptCacheHitTokens) / float64(u.PromptTokens) * 100
+		}
+		log.Printf("[llm] usage: ↑%d ↓%d total=%d cache_hit=%d cache_miss=%d hit_rate=%.1f%%",
+			u.PromptTokens, u.CompletionTokens, u.TotalTokens,
+			u.PromptCacheHitTokens, u.PromptCacheMissTokens, hitRate)
 	}
 	log.Printf("[llm] ───────────────────────────────────────────")
 

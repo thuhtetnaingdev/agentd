@@ -1208,6 +1208,25 @@ func (l *AgentLogger) LogAgentMessage(content string) {
 	})
 }
 
+func (l *AgentLogger) LogUsage(usage SessionUsage) {
+	hitRate := 0.0
+	total := usage.CacheHitTokens + usage.CacheMissTokens
+	if total > 0 {
+		hitRate = float64(usage.CacheHitTokens) / float64(total) * 100
+	}
+	l.Session.SendJSON(map[string]any{
+		"type": "usage_update",
+		"payload": map[string]any{
+			"promptTokens":     usage.PromptTokens,
+			"completionTokens": usage.CompletionTokens,
+			"totalTokens":      usage.TotalTokens,
+			"cacheHitTokens":   usage.CacheHitTokens,
+			"cacheMissTokens":  usage.CacheMissTokens,
+			"cacheHitRate":     hitRate,
+		},
+	})
+}
+
 func (l *AgentLogger) LogError(err error) {
 	log.Printf("[agent] error: %v", err)
 	l.Session.SendJSON(map[string]any{
