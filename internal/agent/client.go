@@ -31,6 +31,45 @@ type ChatMessage struct {
 	Name       string      `json:"name,omitempty"`
 }
 
+// wireChatMessage is the JSON wire format for ChatMessage.
+// Content is any to allow null/string distinction:
+//   - null  for assistant tool-calling turns with no text content
+//   - string for all other messages (including empty string)
+// This ensures byte-identical serialization across turns,
+// preserving DeepSeek's prefix-based prompt cache.
+type wireChatMessage struct {
+	Role       string      `json:"role"`
+	Content    any         `json:"content"` // nil → null, string → "..."
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Name       string      `json:"name,omitempty"`
+}
+
+// toWire converts our internal ChatMessages to the JSON-safe wire format.
+// The cardinal rule: an assistant message with tool_calls and empty content
+// must serialize as "content":null — NOT as the field omitted (omitempty)
+// and NOT as "content":"". Breaking this rule changes the request bytes
+// turn-over-turn, which destroys DeepSeek's prefix-based prompt cache.
+func toWire(msgs []ChatMessage) []wireChatMessage {
+	out := make([]wireChatMessage, len(msgs))
+	for i, m := range msgs {
+		w := wireChatMessage{
+			Role:       m.Role,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+			Name:       m.Name,
+		}
+		// assistant with tool_calls and empty content → null in JSON
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.Content == "" {
+			w.Content = nil
+		} else {
+			w.Content = m.Content
+		}
+		out[i] = w
+	}
+	return out
+}
+
 type ToolCall struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
@@ -66,11 +105,11 @@ type JSONProp struct {
 }
 
 type ChatRequest struct {
-	Model      string        `json:"model"`
-	Tools      []ToolDef     `json:"tools,omitempty"`
-	Messages   []ChatMessage `json:"messages"`
-	ToolChoice string        `json:"tool_choice,omitempty"`
-	Stream     bool          `json:"stream"`
+	Model      string            `json:"model"`
+	Tools      []ToolDef         `json:"tools,omitempty"`
+	Messages   []wireChatMessage `json:"messages"`
+	ToolChoice string            `json:"tool_choice,omitempty"`
+	Stream     bool              `json:"stream"`
 }
 
 type ChatResponse struct {
@@ -123,11 +162,54 @@ func NewClient(apiKey, baseURL, model string) *Client {
 	}
 }
 
+// SanitizeToolPairing repairs a message history so it satisfies the tool-call
+// contract that OpenAI-compatible APIs enforce: every assistant tool_calls entry
+// must be followed by a tool message, and a tool message must follow such a call.
+// It backfills a placeholder result for unanswered calls and drops orphan tool
+// messages. This ensures the prefix is byte-stable between retries, which is
+// critical for DeepSeek's prefix-based prompt cache.
+func SanitizeToolPairing(msgs []ChatMessage) []ChatMessage {
+	out := make([]ChatMessage, 0, len(msgs))
+	for i := 0; i < len(msgs); {
+		m := msgs[i]
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			out = append(out, m)
+			i++
+			for j := i; j < len(msgs) && msgs[j].Role == "tool"; j, i = j+1, j+1 {
+				out = append(out, msgs[j])
+			}
+			// Backfill placeholder for missing tool results
+			answered := 0
+			for k := len(out) - len(m.ToolCalls); k < len(out); k++ {
+				if out[k].Role == "tool" {
+					answered++
+				}
+			}
+			for _, tc := range m.ToolCalls[answered:] {
+				out = append(out, ChatMessage{
+					Role:       "tool",
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+					Content:    `{"error": "no result — interrupted"}`,
+				})
+			}
+			continue
+		}
+		if m.Role == "tool" {
+			i++ // orphan tool — drop
+			continue
+		}
+		out = append(out, m)
+		i++
+	}
+	return out
+}
+
 // Chat sends a chat completion request and returns the response.
 func (c *Client) Chat(messages []ChatMessage, tools []ToolDef) (*ChatResponse, error) {
 	req := ChatRequest{
 		Model:    c.Model,
-		Messages: messages,
+		Messages: toWire(SanitizeToolPairing(messages)),
 		Tools:    tools,
 		Stream:   false,
 	}
@@ -207,7 +289,7 @@ func (c *Client) Chat(messages []ChatMessage, tools []ToolDef) (*ChatResponse, e
 func (c *Client) ChatStream(messages []ChatMessage, tools []ToolDef, onChunk func(chunk StreamChunk) error) error {
 	req := ChatRequest{
 		Model:    c.Model,
-		Messages: messages,
+		Messages: toWire(SanitizeToolPairing(messages)),
 		Tools:    tools,
 		Stream:   true,
 	}
