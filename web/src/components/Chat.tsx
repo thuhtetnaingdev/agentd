@@ -65,6 +65,8 @@ export default function Chat({ projectId }: { projectId: string }) {
         setAgentThinking(false);
         setStreamingContent("");
         setShowReasoning(false);
+        const reasoningText = reasoningRef.current;
+        console.log("[debug] agent_message reasoning:", JSON.stringify(reasoningText));
         const content = msg.payload?.content || "";
         setMessages((prev) => [
           ...prev,
@@ -72,7 +74,7 @@ export default function Chat({ projectId }: { projectId: string }) {
             id: crypto.randomUUID(),
             role: "agent",
             content: content,
-            reasoning: reasoningRef.current || undefined,
+            reasoning: reasoningText || undefined,
             timestamp: new Date(),
           },
         ]);
@@ -258,17 +260,14 @@ export default function Chat({ projectId }: { projectId: string }) {
                 {" · "}
                 {msg.timestamp.toLocaleTimeString()}
               </div>
-              {/* Reasoning (chain-of-thought) — collapsible */}
+              {/* Reasoning (chain-of-thought) — always visible for debugging */}
               {msg.reasoning && (
-                <details className="mt-1 mb-2">
-                  <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none flex items-center gap-1">
-                    <span className="inline-block w-3.5 h-3.5 rounded-full bg-purple-500/20 flex items-center justify-center text-[9px] text-purple-500 font-bold">?</span>
-                    Reasoning
-                  </summary>
-                  <div className="text-xs text-muted-foreground/80 bg-muted/50 rounded p-2 mt-1 border border-border/50 whitespace-pre-wrap break-words leading-relaxed">
+                <div className="mt-1 mb-2 p-2 bg-purple-500/5 border border-purple-500/20 rounded">
+                  <div className="text-[11px] text-purple-500 font-medium mb-1">Reasoning</div>
+                  <div className="text-xs text-muted-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
                     {msg.reasoning}
                   </div>
-                </details>
+                </div>
               )}
               <div className="text-sm whitespace-pre-wrap break-words leading-relaxed">
                 {msg.content}

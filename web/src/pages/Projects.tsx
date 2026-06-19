@@ -155,12 +155,14 @@ export default function Projects() {
         setAgentThinking(false);
         setStreamingContent("");
         setShowReasoning(false);
+        const reasoningText = reasoningRef.current;
+        console.log("[debug] agent_message reasoning:", JSON.stringify(reasoningText));
         if (msg.payload?.content) {
           addMessage({
             id: crypto.randomUUID(),
             role: "agent",
             content: msg.payload.content,
-            reasoning: reasoningRef.current || undefined,
+            reasoning: reasoningText || undefined,
             timestamp: new Date(),
           });
           reasoningRef.current = "";
