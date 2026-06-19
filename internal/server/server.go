@@ -7,8 +7,11 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"agentd/internal/cache"
 	"agentd/internal/config"
 	"agentd/internal/store"
 )
@@ -35,6 +38,7 @@ type Server struct {
 	sessionStore    *store.SessionStore
 	deploymentStore *store.DeploymentStore
 	envStore        *config.EnvStore
+	cache           *cache.Cache
 }
 
 // New creates a new Server.
@@ -46,6 +50,7 @@ func New(opts Options) (*Server, error) {
 		sessionStore:    opts.SessionStore,
 		deploymentStore: opts.DeploymentStore,
 		envStore:        opts.EnvStore,
+		cache:           cache.New(30 * time.Second),
 	}
 	s.hub.SetConfig(opts.WorkDir, opts.Config, opts.SessionStore, opts.DeploymentStore, opts.EnvStore)
 
@@ -60,6 +65,19 @@ func New(opts Options) (*Server, error) {
 	if distFS != nil {
 		fileServer := http.FileServer(http.FS(distFS))
 		s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// Asset files with content-hashed names → far-future cache
+			ext := filepath.Ext(r.URL.Path)
+			if ext == ".js" || ext == ".css" {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".svg" || ext == ".woff" || ext == ".woff2" || ext == ".ico" {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				// index.html and other routes: no cache (SPA may update)
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
+
 			// SPA fallback: serve index.html for non-API routes
 			if r.URL.Path != "/" {
 				f, err := distFS.Open(r.URL.Path[1:])
@@ -95,6 +113,7 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	s.cache.Stop()
 	s.http.Shutdown(ctx)
 }
 

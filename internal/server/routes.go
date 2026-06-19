@@ -61,7 +61,13 @@ func (s *Server) routes() {
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.opts.Config.Settings())
+	if v, ok := s.cache.Get("settings"); ok {
+		json.NewEncoder(w).Encode(v)
+		return
+	}
+	v := s.opts.Config.Settings()
+	s.cache.Set("settings", v)
+	json.NewEncoder(w).Encode(v)
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -89,13 +95,20 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		APIBaseURL: baseURL,
 		Model:      settings.Model,
 	})
+	s.cache.Delete("settings")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.opts.Config.Settings())
 }
 
 func (s *Server) handleListServers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.opts.Config.ListServers())
+	if v, ok := s.cache.Get("servers"); ok {
+		json.NewEncoder(w).Encode(v)
+		return
+	}
+	v := s.opts.Config.ListServers()
+	s.cache.Set("servers", v)
+	json.NewEncoder(w).Encode(v)
 }
 
 func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +122,8 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("servers")
+	s.cache.Delete("stats")
 	w.WriteHeader(http.StatusCreated)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(created)
@@ -137,6 +152,8 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("servers")
+	s.cache.Delete("stats")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(srv)
 }
@@ -147,20 +164,33 @@ func (s *Server) handleDeleteServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("servers")
+	s.cache.Delete("stats")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if v, ok := s.cache.Get("projects"); ok {
+		json.NewEncoder(w).Encode(v)
+		return
+	}
 	projects, err := project.Scan(s.opts.WorkDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	s.cache.SetWithTTL("projects", projects, 30*time.Second)
 	json.NewEncoder(w).Encode(projects)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if v, ok := s.cache.Get("stats"); ok {
+		json.NewEncoder(w).Encode(v)
+		return
+	}
+
 	servers := s.opts.Config.ListServers()
 	projects, _ := project.Scan(s.opts.WorkDir)
 	hasAPIKey := s.opts.Config.Settings().APIKey != ""
@@ -172,14 +202,15 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	v := map[string]any{
 		"serverCount":      len(servers),
 		"projectCount":     len(projects),
 		"deploymentCount":  deploymentCount,
 		"hasAPIKey":        hasAPIKey,
 		"workDir":          s.opts.WorkDir,
-	})
+	}
+	s.cache.Set("stats", v)
+	json.NewEncoder(w).Encode(v)
 }
 
 // --- Session handlers ---
@@ -190,6 +221,12 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]any{})
 		return
 	}
+	cacheKey := "sessions:" + projectID
+	if v, ok := s.cache.Get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(v)
+		return
+	}
 	sessions, err := s.sessionStore.List(projectID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -198,6 +235,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if sessions == nil {
 		sessions = []store.Session{}
 	}
+	s.cache.Set(cacheKey, sessions)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sessions)
 }
@@ -219,6 +257,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("sessions:" + body.ProjectID)
 	w.WriteHeader(http.StatusCreated)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(swm)
@@ -251,6 +290,7 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("sessions:" + projectID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -283,6 +323,11 @@ func (s *Server) handleListEnv(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]config.EnvEntry{})
 		return
 	}
+	if v, ok := s.cache.Get("env"); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(v)
+		return
+	}
 	entries, err := s.envStore.ListMasked()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -291,6 +336,7 @@ func (s *Server) handleListEnv(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []config.EnvEntry{}
 	}
+	s.cache.Set("env", entries)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(entries)
 }
@@ -316,6 +362,7 @@ func (s *Server) handlePutEnv(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("env")
 	// Return updated list
 	s.handleListEnv(w, r)
 }
@@ -330,14 +377,20 @@ func (s *Server) handleDeleteEnv(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("env")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Deployment handlers ---
 
 func (s *Server) handleListDeployments(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	if s.deploymentStore == nil {
 		json.NewEncoder(w).Encode([]any{})
+		return
+	}
+	if v, ok := s.cache.Get("deployments"); ok {
+		json.NewEncoder(w).Encode(v)
 		return
 	}
 	recs, err := s.deploymentStore.List()
@@ -345,7 +398,7 @@ func (s *Server) handleListDeployments(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	s.cache.Set("deployments", recs)
 	json.NewEncoder(w).Encode(recs)
 }
 
@@ -399,6 +452,7 @@ func (s *Server) handleDeploymentHealth(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.deploymentStore.UpdateHealth(rec.ID, healthStatus, time.Now())
+	s.cache.Delete("deployments")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -422,6 +476,8 @@ func (s *Server) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.cache.Delete("deployments")
+	s.cache.Delete("stats")
 	w.WriteHeader(http.StatusNoContent)
 }
 
