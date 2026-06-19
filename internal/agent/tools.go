@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 // ToolResult is the result of executing a tool.
@@ -45,6 +46,9 @@ func (r *Registry) Definitions() []ToolDef {
 	for _, t := range r.tools {
 		defs = append(defs, t.Def)
 	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Function.Name < defs[j].Function.Name
+	})
 	return defs
 }
 
