@@ -6,6 +6,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "agent" | "tool" | "tool_call" | "choice";
   content: string;
+  reasoning?: string;
   toolName?: string;
   toolCallId?: string;
   toolStatus?: "running" | "success" | "error";
@@ -38,6 +39,9 @@ export default function Chat({ projectId }: { projectId: string }) {
   const [input, setInput] = useState("");
   const [agentThinking, setAgentThinking] = useState(false);
   const [usage, setUsage] = useState<UsageStats | null>(null);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [streamingReasoning, setStreamingReasoning] = useState("");
+  const [showReasoning, setShowReasoning] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const handleMessage = (msg: WSMessage) => {
@@ -45,17 +49,33 @@ export default function Chat({ projectId }: { projectId: string }) {
       case "chat_ack":
         // Acknowledged — agent is processing
         break;
+      case "reasoning_update":
+        // Accumulate reasoning content as it arrives
+        setStreamingReasoning((prev) => prev + (msg.payload?.content || ""));
+        setShowReasoning(true);
+        break;
+      case "content_chunk":
+        // Accumulate content chunks into the streaming message
+        setStreamingContent((prev) => prev + (msg.payload?.content || ""));
+        break;
       case "agent_message":
+        // Finalize the streamed content into a permanent message
         setAgentThinking(false);
+        setStreamingContent("");
+        setShowReasoning(false);
+        // Use accumulated streaming content if available, otherwise payload
+        const content = msg.payload?.content || "";
         setMessages((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
             role: "agent",
-            content: msg.payload?.content || "",
+            content: content,
+            reasoning: streamingReasoning || undefined,
             timestamp: new Date(),
           },
         ]);
+        setStreamingReasoning("");
         break;
       case "tool_call":
         setMessages((prev) => [
@@ -236,6 +256,18 @@ export default function Chat({ projectId }: { projectId: string }) {
                 {" · "}
                 {msg.timestamp.toLocaleTimeString()}
               </div>
+              {/* Reasoning (chain-of-thought) — collapsible */}
+              {msg.reasoning && (
+                <details className="mt-1 mb-2">
+                  <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none flex items-center gap-1">
+                    <span className="inline-block w-3.5 h-3.5 rounded-full bg-purple-500/20 flex items-center justify-center text-[9px] text-purple-500 font-bold">?</span>
+                    Reasoning
+                  </summary>
+                  <div className="text-xs text-muted-foreground/80 bg-muted/50 rounded p-2 mt-1 border border-border/50 whitespace-pre-wrap break-words leading-relaxed">
+                    {msg.reasoning}
+                  </div>
+                </details>
+              )}
               <div className="text-sm whitespace-pre-wrap break-words leading-relaxed">
                 {msg.content}
               </div>
@@ -265,13 +297,42 @@ export default function Chat({ projectId }: { projectId: string }) {
           </div>
         ))}
 
-        {/* Thinking indicator */}
-        {agentThinking && (
+        {/* Thinking indicator (shown while waiting for first stream chunk) */}
+        {agentThinking && !streamingContent && !streamingReasoning && (
           <div className="flex gap-3">
             <div className="w-7 h-7 rounded-md bg-green-500/10 flex items-center justify-center">
               <Loader2 className="w-3.5 h-3.5 text-green-500 animate-spin" />
             </div>
             <div className="text-sm text-muted-foreground">Agent is thinking...</div>
+          </div>
+        )}
+
+        {/* Live streaming content — shown while agent is generating */}
+        {streamingContent && (
+          <div className="flex gap-3">
+            <div className="w-7 h-7 rounded-md bg-green-500/10 flex items-center justify-center">
+              <Bot className="w-3.5 h-3.5 text-green-500" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-muted-foreground mb-1">
+                Agent &middot; {new Date().toLocaleTimeString()}
+              </div>
+              {streamingReasoning && (
+                <details open={showReasoning} className="mb-2">
+                  <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none flex items-center gap-1">
+                    <span className="inline-block w-3.5 h-3.5 rounded-full bg-purple-500/20 flex items-center justify-center text-[9px] text-purple-500 font-bold">?</span>
+                    Reasoning
+                  </summary>
+                  <div className="text-xs text-muted-foreground/80 bg-muted/50 rounded p-2 mt-1 border border-border/50 whitespace-pre-wrap break-words leading-relaxed">
+                    {streamingReasoning}
+                  </div>
+                </details>
+              )}
+              <div className="text-sm whitespace-pre-wrap break-words leading-relaxed">
+                {streamingContent}
+                <span className="inline-block w-1.5 h-4 bg-primary/50 animate-pulse ml-0.5 align-text-bottom" />
+              </div>
+            </div>
           </div>
         )}
 

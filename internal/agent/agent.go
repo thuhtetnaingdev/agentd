@@ -1208,6 +1208,32 @@ func (l *AgentLogger) LogAgentMessage(content string) {
 	})
 }
 
+// LogReasoningDelta streams a reasoning token to the frontend.
+func (l *AgentLogger) LogReasoningDelta(chunk string) {
+	if chunk == "" {
+		return
+	}
+	l.Session.SendJSON(map[string]any{
+		"type": "reasoning_update",
+		"payload": map[string]any{
+			"content": chunk,
+		},
+	})
+}
+
+// LogContentChunk streams a content token to the frontend.
+func (l *AgentLogger) LogContentChunk(chunk string) {
+	if chunk == "" {
+		return
+	}
+	l.Session.SendJSON(map[string]any{
+		"type": "content_chunk",
+		"payload": map[string]any{
+			"content": chunk,
+		},
+	})
+}
+
 func (l *AgentLogger) LogUsage(usage SessionUsage) {
 	hitRate := 0.0
 	total := usage.CacheHitTokens + usage.CacheMissTokens

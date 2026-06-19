@@ -301,6 +301,9 @@ func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 }
 
 // RunStreaming executes the agent loop with streaming responses.
+// Every LLM call is streamed so the user sees content and reasoning
+// appear in real-time. Tool-calling iterations also stream text and
+// reasoning before the tool calls are executed.
 func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) error {
 	r.messages = append(r.messages, ChatMessage{
 		Role:    "user",
@@ -315,6 +318,7 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 		default:
 		}
 
+		// If we're near the limit, ask the LLM to wrap up
 		if i >= maxIterations-3 {
 			r.messages = append(r.messages, ChatMessage{
 				Role:    "system",
@@ -324,44 +328,131 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 
 		tools := r.registry.Definitions()
 
-		// First do a non-streaming call to check for tool calls
-		resp, err := r.client.Chat(r.messages, tools)
+		// Stream every iteration -- accumulate content, reasoning, and tool calls
+		// from the streaming response.
+		var accumulatedContent strings.Builder
+		var accumulatedReasoning strings.Builder
+		var accumulatedToolCalls []ToolCall
+		var lastChunkFinishReason string
+		var lastUsage *UsageData
+
+		err := r.client.ChatStream(r.messages, tools, func(chunk StreamChunk) error {
+			for _, choice := range chunk.Choices {
+				// Stream reasoning in real-time
+				if choice.Delta.ReasoningContent != "" {
+					accumulatedReasoning.WriteString(choice.Delta.ReasoningContent)
+					r.logger.LogReasoningDelta(choice.Delta.ReasoningContent)
+				}
+				// Stream content in real-time
+				if choice.Delta.Content != "" {
+					accumulatedContent.WriteString(choice.Delta.Content)
+					r.logger.LogContentChunk(choice.Delta.Content)
+				}
+				// Accumulate tool call deltas (streaming arrives as partial chunks)
+				for _, tcd := range choice.Delta.ToolCalls {
+					// Ensure we have enough slots
+					for len(accumulatedToolCalls) <= tcd.Index {
+						accumulatedToolCalls = append(accumulatedToolCalls, ToolCall{})
+					}
+					tc := &accumulatedToolCalls[tcd.Index]
+					if tcd.ID != "" {
+						tc.ID = tcd.ID
+					}
+					if tcd.Type != "" {
+						tc.Type = tcd.Type
+					}
+					if tcd.Function.Name != "" {
+						tc.Function.Name = tcd.Function.Name
+					}
+					if tcd.Function.Arguments != "" {
+						tc.Function.Arguments += tcd.Function.Arguments
+					}
+				}
+				if choice.FinishReason != "" {
+					lastChunkFinishReason = choice.FinishReason
+				}
+			}
+			if chunk.Usage != nil {
+				lastUsage = chunk.Usage
+			}
+			return nil
+		})
 		if err != nil {
 			r.logger.LogError(fmt.Errorf("LLM call failed: %w", err))
 			return err
 		}
 
-		// Accumulate usage
-		if resp.Usage != nil {
-			r.usage.PromptTokens += resp.Usage.PromptTokens
-			r.usage.CompletionTokens += resp.Usage.CompletionTokens
-			r.usage.TotalTokens += resp.Usage.TotalTokens
-			r.usage.CacheHitTokens += resp.Usage.PromptCacheHitTokens
-			r.usage.CacheMissTokens += resp.Usage.PromptCacheMissTokens
+		// Log the request and response summaries
+		log.Printf("[llm] ── request (iter) ─────────────────────────")
+		log.Printf("[llm] model=%s  msgs=%d  tools=%d  last_role=%s", r.client.Model, len(r.messages), len(tools), r.messages[len(r.messages)-1].Role)
+		log.Printf("[llm] ── response ──────────────────────────────")
+		log.Printf("[llm] finish_reason: %s", lastChunkFinishReason)
+		contentStr := accumulatedContent.String()
+		reasoningStr := accumulatedReasoning.String()
+		if contentStr != "" {
+			log.Printf("[llm] content: %s", contentStr)
+		}
+		if reasoningStr != "" {
+			log.Printf("[llm] reasoning: %s", reasoningStr)
+		}
+		for _, tc := range accumulatedToolCalls {
+			if tc.Function.Name != "" {
+				log.Printf("[llm] tool_call: %s(%s)", tc.Function.Name, tc.Function.Arguments)
+			}
+		}
+
+		// Accumulate usage from the final stream chunk
+		if lastUsage != nil {
+			r.usage.PromptTokens += lastUsage.PromptTokens
+			r.usage.CompletionTokens += lastUsage.CompletionTokens
+			r.usage.TotalTokens += lastUsage.TotalTokens
+			r.usage.CacheHitTokens += lastUsage.PromptCacheHitTokens
+			r.usage.CacheMissTokens += lastUsage.PromptCacheMissTokens
 		}
 		if r.usage.ContextWindow == 0 {
 			r.usage.ContextWindow = ContextWindowForModel(r.client.Model)
 		}
 		r.logger.LogUsage(r.usage)
+		if lastUsage != nil {
+			hitRate := 0.0
+			if lastUsage.PromptTokens > 0 {
+				hitRate = float64(lastUsage.PromptCacheHitTokens) / float64(lastUsage.PromptTokens) * 100
+			}
+			log.Printf("[llm] usage: ↑%d ↓%d total=%d cache_hit=%d cache_miss=%d hit_rate=%.1f%%",
+				lastUsage.PromptTokens, lastUsage.CompletionTokens, lastUsage.TotalTokens,
+				lastUsage.PromptCacheHitTokens, lastUsage.PromptCacheMissTokens, hitRate)
+		}
+		log.Printf("[llm] ───────────────────────────────────────────")
 
-		if len(resp.Choices) == 0 {
-			return fmt.Errorf("no response from LLM")
+		// Remove empty/partial tool calls (those with no name)
+		var toolCalls []ToolCall
+		for _, tc := range accumulatedToolCalls {
+			if tc.Function.Name != "" {
+				toolCalls = append(toolCalls, tc)
+			}
 		}
 
-		msg := resp.Choices[0].Message
+		// Build the assistant message
+		msg := ChatMessage{
+			Role:      "assistant",
+			Content:   contentStr,
+			ToolCalls: toolCalls,
+		}
 
-		// If tool calls, handle them
-		if len(msg.ToolCalls) > 0 {
-			// Send agent content first so live view matches what history will show
-			if msg.Content != "" {
-				r.logger.LogAgentMessage(msg.Content)
+		// If the LLM wants to call tools
+		if len(toolCalls) > 0 {
+			// Send the full content as an agent_message (finalizes the temp streaming bubble)
+			if contentStr != "" {
+				r.logger.LogAgentMessage(contentStr)
 			}
 
+			// Add assistant message with tool calls to history
 			r.messages = append(r.messages, msg)
 
-			for _, tc := range msg.ToolCalls {
+			for _, tc := range toolCalls {
 				args, err := parseToolArgs(tc.Function.Arguments)
 				if err != nil {
+					r.logger.LogError(fmt.Errorf("bad tool args for %s: %w", tc.Function.Name, err))
 					r.messages = append(r.messages, ChatMessage{
 						Role:       "tool",
 						ToolCallID: tc.ID,
@@ -374,6 +465,7 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 
 				result, err := r.registry.Execute(ctx, tc.Function.Name, args)
 				if err != nil {
+					log.Printf("[agent] tool %s execution error: %v", tc.Function.Name, err)
 					result = &ToolResult{Success: false, Error: err.Error()}
 				}
 
@@ -387,32 +479,17 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 					Content:    string(resultJSON),
 				})
 			}
+
+			// Continue loop -- LLM will process tool results in the next iteration
 			continue
 		}
 
-		// Final message — stream it
-		if msg.Content != "" {
-			// Stream for nicer UX
-			var fullContent strings.Builder
-			err := r.client.ChatStream(r.messages, nil, func(chunk StreamChunk) error {
-				for _, choice := range chunk.Choices {
-					if choice.Delta.Content != "" {
-						fullContent.WriteString(choice.Delta.Content)
-					}
-				}
-				return nil
-			})
-			if err != nil {
-				// Fallback: send non-streamed content
-				r.logger.LogAgentMessage(msg.Content)
-			} else {
-				r.logger.LogAgentMessage(fullContent.String())
-			}
-			log.Printf("[llm] ── final stream ──────────────────────────")
-			log.Printf("[llm] content: %s", fullContent.String())
-			log.Printf("[llm] ───────────────────────────────────────────")
+		// Final response from LLM -- content was already streamed
+		if contentStr != "" {
+			r.logger.LogAgentMessage(contentStr)
 		}
 		r.messages = append(r.messages, msg)
+		_ = lastChunkFinishReason
 		return nil
 	}
 

@@ -321,7 +321,7 @@ func (s *Session) handleChat(msg WSMessage) {
 			s.cancelFn = nil
 			s.cancelMu.Unlock()
 		}()
-		if err := s.runner.Run(ctx, payload.Message); err != nil {
+		if err := s.runner.RunStreaming(ctx, payload.Message); err != nil {
 			if err == context.Canceled {
 				s.SendJSON(map[string]any{
 					"type":    "agent_cancelled",

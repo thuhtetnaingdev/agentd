@@ -29,6 +29,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "agent" | "tool" | "tool_call" | "choice";
   content: string;
+  reasoning?: string;
   toolName?: string;
   toolCallId?: string;
   toolStatus?: "running" | "success" | "error";
@@ -88,6 +89,9 @@ export default function Projects() {
   const [servers, setServers] = useState<{ id: string; name: string; host: string }[]>([]);
   const [selectedServer, setSelectedServer] = useState<string>("");
   const [usage, setUsage] = useState<UsageStats | null>(null);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [streamingReasoning, setStreamingReasoning] = useState("");
+  const [showReasoning, setShowReasoning] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const fmtTokens = (n: number) => {
@@ -136,15 +140,28 @@ export default function Projects() {
     };
 
     switch (msg.type) {
+      case "reasoning_update":
+        // Accumulate reasoning content as it arrives
+        setStreamingReasoning((prev) => prev + (msg.payload?.content || ""));
+        setShowReasoning(true);
+        break;
+      case "content_chunk":
+        // Accumulate content chunks into the streaming message
+        setStreamingContent((prev) => prev + (msg.payload?.content || ""));
+        break;
       case "agent_message":
         setAgentThinking(false);
+        setStreamingContent("");
+        setShowReasoning(false);
         if (msg.payload?.content) {
           addMessage({
             id: crypto.randomUUID(),
             role: "agent",
             content: msg.payload.content,
+            reasoning: streamingReasoning || undefined,
             timestamp: new Date(),
           });
+          setStreamingReasoning("");
         }
         break;
       case "tool_call":

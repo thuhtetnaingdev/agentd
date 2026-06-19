@@ -104,12 +104,17 @@ type JSONProp struct {
 	Enum        []string `json:"enum,omitempty"`
 }
 
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
+}
+
 type ChatRequest struct {
-	Model      string            `json:"model"`
-	Tools      []ToolDef         `json:"tools,omitempty"`
-	Messages   []wireChatMessage `json:"messages"`
-	ToolChoice string            `json:"tool_choice,omitempty"`
-	Stream     bool              `json:"stream"`
+	Model         string            `json:"model"`
+	Tools         []ToolDef         `json:"tools,omitempty"`
+	Messages      []wireChatMessage `json:"messages"`
+	ToolChoice    string            `json:"tool_choice,omitempty"`
+	Stream        bool              `json:"stream"`
+	StreamOptions *StreamOptions    `json:"stream_options,omitempty"`
 }
 
 type ChatResponse struct {
@@ -120,12 +125,20 @@ type ChatResponse struct {
 	Usage *UsageData `json:"usage,omitempty"`
 }
 
+// ToolCallDelta is the streaming delta for a tool call (includes index for accumulation).
+type ToolCallDelta struct {
+	Index    int          `json:"index"`
+	ID       string       `json:"id,omitempty"`
+	Type     string       `json:"type,omitempty"`
+	Function FunctionCall `json:"function,omitempty"`
+}
+
 type StreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content          string     `json:"content"`
-			ToolCalls        []ToolCall `json:"tool_calls"`
-			ReasoningContent string     `json:"reasoning_content"`
+			Content          string          `json:"content"`
+			ToolCalls        []ToolCallDelta `json:"tool_calls"`
+			ReasoningContent string          `json:"reasoning_content"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -292,6 +305,9 @@ func (c *Client) ChatStream(messages []ChatMessage, tools []ToolDef, onChunk fun
 		Messages: toWire(SanitizeToolPairing(messages)),
 		Tools:    tools,
 		Stream:   true,
+		StreamOptions: &StreamOptions{
+			IncludeUsage: true,
+		},
 	}
 	if len(tools) > 0 {
 		req.ToolChoice = "auto"
