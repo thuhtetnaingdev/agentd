@@ -19,6 +19,7 @@ import {
   Server,
   Square,
   Wrench,
+  BrainCircuit,
 } from "lucide-react";
 import Markdown from "../components/Markdown";
 
@@ -52,6 +53,17 @@ interface SessionData {
   updatedAt: string;
 }
 
+interface UsageStats {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  cacheHitRate: number;
+  contextWindow: number;
+  contextUsagePercent: number;
+}
+
 // --- Main Component ---
 
 export default function Projects() {
@@ -75,7 +87,14 @@ export default function Projects() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [servers, setServers] = useState<{ id: string; name: string; host: string }[]>([]);
   const [selectedServer, setSelectedServer] = useState<string>("");
+  const [usage, setUsage] = useState<UsageStats | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const fmtTokens = (n: number) => {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+    if (n >= 1_000) return (n / 1_000).toFixed(0) + "k";
+    return String(n);
+  };
 
   // Auto-pick project
   useEffect(() => {
@@ -183,6 +202,9 @@ export default function Projects() {
           content: "⏹️ Agent stopped.",
           timestamp: new Date(),
         });
+        break;
+      case "usage_update":
+        setUsage(msg.payload);
         break;
     }
   }, []);
@@ -529,6 +551,38 @@ export default function Projects() {
 
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Usage footer */}
+        {usage && (
+          <div className="flex-shrink-0 border-t border-border px-4 py-1.5 flex items-center gap-3 text-[11px] text-muted-foreground font-mono">
+            <BrainCircuit className="w-3 h-3 flex-shrink-0" />
+            <span title={`Prompt tokens: ${usage.promptTokens.toLocaleString()}`}>
+              ↑{fmtTokens(usage.promptTokens)}
+            </span>
+            <span title={`Completion tokens: ${usage.completionTokens.toLocaleString()}`}>
+              ↓{fmtTokens(usage.completionTokens)}
+            </span>
+            <span title={`Total tokens (cumulative): ${usage.totalTokens.toLocaleString()}`}>
+              R{fmtTokens(usage.totalTokens)}
+            </span>
+            <span
+              title={`Cache hit: ${usage.cacheHitTokens.toLocaleString()} · Cache miss: ${usage.cacheMissTokens.toLocaleString()}`}
+              className={usage.cacheHitRate >= 90 ? "text-green-500" : usage.cacheHitRate >= 50 ? "text-yellow-500" : "text-red-500"}
+            >
+              CH{usage.cacheHitRate.toFixed(1)}%
+            </span>
+            {usage.contextWindow > 0 && (
+              <span title={`Context usage: ${usage.promptTokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} (${usage.contextUsagePercent.toFixed(1)}%)`}>
+                {usage.contextUsagePercent.toFixed(1)}%/{fmtTokens(usage.contextWindow)}
+              </span>
+            )}
+            {usage.totalTokens > 0 && (
+              <span className="text-muted-foreground/60">
+                (auto)
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Input */}
         <div className="flex-shrink-0 border-t border-border bg-card p-4">
