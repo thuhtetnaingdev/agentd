@@ -265,8 +265,8 @@ func TestBuildStoreMessages_WhitespaceOnlyAgentContent(t *testing.T) {
 	}
 }
 
-// TestJSONRoundtrip verifies the full JSON store/load pipeline preserves all fields.
-func TestJSONRoundtrip(t *testing.T) {
+// TestJSONLRoundtrip verifies the full JSONL store/load pipeline preserves all fields.
+func TestJSONLRoundtrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	ss := store.NewSessionStore(filepath.Join(tmpDir, "store"))
 
@@ -320,22 +320,22 @@ func TestJSONRoundtrip(t *testing.T) {
 		t.Error("Timestamp is zero")
 	}
 
-	// Verify the raw JSON on disk has all the new fields
-	data, err := os.ReadFile(filepath.Join(tmpDir, "store", "pj", "sid.json"))
+	// Verify the raw JSONL on disk has all the new fields
+	data, err := os.ReadFile(filepath.Join(tmpDir, "store", "pj", "sid.jsonl"))
 	if err != nil {
-		t.Fatalf("reading JSON file: %v", err)
+		t.Fatalf("reading JSONL file: %v", err)
 	}
 
-	requiredJSONFields := []string{
+	requiredJSONLFields := []string{
 		`"isError"`,
 		`"errorDetail"`,
 		`"timestamp"`,
 		`"toolCallId"`,
 	}
 
-	for _, f := range requiredJSONFields {
+	for _, f := range requiredJSONLFields {
 		if !containsStr(string(data), f) {
-			t.Errorf("JSON on disk missing field %s. Raw: %s", f, string(data))
+			t.Errorf("JSONL on disk missing field %s. Raw: %s", f, string(data))
 		}
 	}
 }
