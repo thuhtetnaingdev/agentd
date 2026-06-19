@@ -109,7 +109,7 @@ func (h *Hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		ID:         wsSessionID,
 		ProjectID:  projectID,
 		Conn:       conn,
-		Send:       make(chan []byte, 64),
+		Send:       make(chan []byte, 256),
 		hub:        h,
 		sessionID:  persistSessionID,
 		choiceCh:   make(chan string, 1),
@@ -178,8 +178,19 @@ func (s *Session) SendJSON(v any) error {
 	select {
 	case s.Send <- data:
 	default:
+		log.Printf("[ws] dropping message type=%s (buffer full)", s.messageType(v))
 	}
 	return nil
+} 
+
+// messageType extracts the "type" field from a JSON-like map.
+func (s *Session) messageType(v any) string {
+	if m, ok := v.(map[string]any); ok {
+		if t, ok := m["type"].(string); ok {
+			return t
+		}
+	}
+	return "unknown"
 }
 
 // WaitForChoice blocks until the user responds to an ask_user prompt.
