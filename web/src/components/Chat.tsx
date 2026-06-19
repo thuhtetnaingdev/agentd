@@ -63,14 +63,16 @@ export default function Chat({ projectId }: { projectId: string }) {
         setAgentThinking(false);
         setStreamingContent("");
         setShowReasoning(false);
-        const content = msg.payload?.content || "";
+        const _content = msg.payload?.content || "";
+        const _reasoning = msg.payload?.reasoning;
+        console.log("[agent_message] backend sent reasoning:", typeof _reasoning, _reasoning ? _reasoning.slice(0,100) : "(empty)");
         setMessages((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
             role: "agent",
-            content: content,
-            reasoning: msg.payload?.reasoning || undefined,
+            content: _content,
+            reasoning: _reasoning || undefined,
             timestamp: new Date(),
           },
         ]);
@@ -255,9 +257,8 @@ export default function Chat({ projectId }: { projectId: string }) {
                 {" · "}
                 {msg.timestamp.toLocaleTimeString()}
               </div>
-              {/* Reasoning debug — always renders so we can see what's happening */}
-              <div style={{marginTop: 8, marginBottom: 8, padding: 8, border: '2px solid red', borderRadius: 4, fontSize: 11}}>
-                REASONING DEBUG: typeof={typeof msg.reasoning} value={JSON.stringify(msg.reasoning)}
+              <div className="mt-1 mb-2 p-2 border-2 border-red-500 rounded text-xs" id="reasoning-debug-{msg.id}">
+                [{typeof msg.reasoning}] {msg.reasoning ? msg.reasoning.substring(0,200) : "(empty)"}
               </div>
               <div className="text-sm whitespace-pre-wrap break-words leading-relaxed">
                 {msg.content}

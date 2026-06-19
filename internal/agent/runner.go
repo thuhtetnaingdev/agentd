@@ -443,6 +443,7 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 		if len(toolCalls) > 0 {
 			// Send the full content as an agent_message with reasoning
 			if contentStr != "" {
+				log.Printf("[llm] sending agent_message with reasoning_len=%d", len(reasoningStr))
 				r.logger.LogAgentMessageWithReasoning(contentStr, reasoningStr)
 			}
 
@@ -486,6 +487,7 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 
 		// Final response from LLM -- content was already streamed
 		if contentStr != "" {
+			log.Printf("[llm] sending agent_message with reasoning_len=%d", len(reasoningStr))
 			r.logger.LogAgentMessageWithReasoning(contentStr, reasoningStr)
 		}
 		r.messages = append(r.messages, msg)

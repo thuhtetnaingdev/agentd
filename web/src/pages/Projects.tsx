@@ -762,7 +762,17 @@ function MessageBubble({
           }`}
         >
           {isAgent ? (
-            <Markdown content={msg.content} />
+            <>
+              {msg.reasoning && (
+                <div className="mb-2 p-2 bg-purple-500/5 border border-purple-500/20 rounded">
+                  <div className="text-[11px] text-purple-500 font-medium mb-1">Reasoning</div>
+                  <div className="text-xs text-muted-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
+                    {msg.reasoning}
+                  </div>
+                </div>
+              )}
+              <Markdown content={msg.content} />
+            </>
           ) : (
             <div className="whitespace-pre-wrap break-words">{msg.content}</div>
           )}
