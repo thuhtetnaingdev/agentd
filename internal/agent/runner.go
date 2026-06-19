@@ -441,9 +441,9 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 
 		// If the LLM wants to call tools
 		if len(toolCalls) > 0 {
-			// Send the full content as an agent_message (finalizes the temp streaming bubble)
+			// Send the full content as an agent_message with reasoning
 			if contentStr != "" {
-				r.logger.LogAgentMessage(contentStr)
+				r.logger.LogAgentMessageWithReasoning(contentStr, reasoningStr)
 			}
 
 			// Add assistant message with tool calls to history
@@ -486,7 +486,7 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 
 		// Final response from LLM -- content was already streamed
 		if contentStr != "" {
-			r.logger.LogAgentMessage(contentStr)
+			r.logger.LogAgentMessageWithReasoning(contentStr, reasoningStr)
 		}
 		r.messages = append(r.messages, msg)
 		_ = lastChunkFinishReason

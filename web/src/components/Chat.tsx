@@ -43,7 +43,6 @@ export default function Chat({ projectId }: { projectId: string }) {
   const [streamingReasoning, setStreamingReasoning] = useState("");
   const [showReasoning, setShowReasoning] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const reasoningRef = useRef(""); // ref avoids stale closure issues
 
   const handleMessage = (msg: WSMessage) => {
     switch (msg.type) {
@@ -51,9 +50,8 @@ export default function Chat({ projectId }: { projectId: string }) {
         // Acknowledged — agent is processing
         break;
       case "reasoning_update":
-        // Accumulate reasoning content as it arrives (ref avoids stale closure)
-        reasoningRef.current += msg.payload?.content || "";
-        setStreamingReasoning(reasoningRef.current);
+        // Accumulate reasoning content as it arrives (live streaming display)
+        setStreamingReasoning((prev) => prev + (msg.payload?.content || ""));
         setShowReasoning(true);
         break;
       case "content_chunk":
@@ -65,8 +63,6 @@ export default function Chat({ projectId }: { projectId: string }) {
         setAgentThinking(false);
         setStreamingContent("");
         setShowReasoning(false);
-        const reasoningText = reasoningRef.current;
-        console.log("[debug] agent_message reasoning:", JSON.stringify(reasoningText));
         const content = msg.payload?.content || "";
         setMessages((prev) => [
           ...prev,
@@ -74,11 +70,10 @@ export default function Chat({ projectId }: { projectId: string }) {
             id: crypto.randomUUID(),
             role: "agent",
             content: content,
-            reasoning: reasoningText || undefined,
+            reasoning: msg.payload?.reasoning || undefined,
             timestamp: new Date(),
           },
         ]);
-        reasoningRef.current = "";
         setStreamingReasoning("");
         break;
       case "tool_call":

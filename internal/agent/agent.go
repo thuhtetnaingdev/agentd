@@ -1197,14 +1197,23 @@ func (l *AgentLogger) LogToolResult(name string, result *ToolResult, toolCallID 
 }
 
 func (l *AgentLogger) LogAgentMessage(content string) {
+	l.LogAgentMessageWithReasoning(content, "")
+}
+
+// LogAgentMessageWithReasoning sends an agent message with optional reasoning content.
+func (l *AgentLogger) LogAgentMessageWithReasoning(content, reasoning string) {
 	if strings.TrimSpace(content) == "" {
 		return // skip empty bubbles (including whitespace-only like "\n")
 	}
+	payload := map[string]any{
+		"content": content,
+	}
+	if reasoning != "" {
+		payload["reasoning"] = reasoning
+	}
 	l.Session.SendJSON(map[string]any{
 		"type": "agent_message",
-		"payload": map[string]any{
-			"content": content,
-		},
+		"payload": payload,
 	})
 }
 
