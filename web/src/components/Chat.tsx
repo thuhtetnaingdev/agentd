@@ -21,6 +21,8 @@ interface UsageStats {
   cacheHitTokens: number;
   cacheMissTokens: number;
   cacheHitRate: number;
+  contextWindow: number;
+  contextUsagePercent: number;
 }
 
 export default function Chat({ projectId }: { projectId: string }) {
@@ -286,7 +288,7 @@ export default function Chat({ projectId }: { projectId: string }) {
           <span title={`Completion tokens: ${usage.completionTokens.toLocaleString()}`}>
             ↓{fmtTokens(usage.completionTokens)}
           </span>
-          <span title={`Total tokens: ${usage.totalTokens.toLocaleString()}`}>
+          <span title={`Total tokens (cumulative): ${usage.totalTokens.toLocaleString()}`}>
             R{fmtTokens(usage.totalTokens)}
           </span>
           <span
@@ -295,6 +297,11 @@ export default function Chat({ projectId }: { projectId: string }) {
           >
             CH{usage.cacheHitRate.toFixed(1)}%
           </span>
+          {usage.contextWindow > 0 && (
+            <span title={`Context usage: ${usage.promptTokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} (${usage.contextUsagePercent.toFixed(1)}%)`}>
+              {usage.contextUsagePercent.toFixed(1)}%/{fmtTokens(usage.contextWindow)}
+            </span>
+          )}
           {usage.totalTokens > 0 && (
             <span className="text-muted-foreground/60">
               (auto)

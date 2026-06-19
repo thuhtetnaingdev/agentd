@@ -1214,15 +1214,21 @@ func (l *AgentLogger) LogUsage(usage SessionUsage) {
 	if total > 0 {
 		hitRate = float64(usage.CacheHitTokens) / float64(total) * 100
 	}
+	ctxPercent := 0.0
+	if usage.ContextWindow > 0 {
+		ctxPercent = float64(usage.PromptTokens) / float64(usage.ContextWindow) * 100
+	}
 	l.Session.SendJSON(map[string]any{
 		"type": "usage_update",
 		"payload": map[string]any{
-			"promptTokens":     usage.PromptTokens,
-			"completionTokens": usage.CompletionTokens,
-			"totalTokens":      usage.TotalTokens,
-			"cacheHitTokens":   usage.CacheHitTokens,
-			"cacheMissTokens":  usage.CacheMissTokens,
-			"cacheHitRate":     hitRate,
+			"promptTokens":         usage.PromptTokens,
+			"completionTokens":     usage.CompletionTokens,
+			"totalTokens":          usage.TotalTokens,
+			"cacheHitTokens":       usage.CacheHitTokens,
+			"cacheMissTokens":      usage.CacheMissTokens,
+			"cacheHitRate":         hitRate,
+			"contextWindow":        usage.ContextWindow,
+			"contextUsagePercent":  ctxPercent,
 		},
 	})
 }

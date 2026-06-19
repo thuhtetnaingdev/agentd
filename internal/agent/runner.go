@@ -94,6 +94,25 @@ When a user asks to deploy, follow this exact process:
 - If something fails, explain what went wrong and suggest next steps
 - The user may not have a domain yet — if they don't, configure with the server IP as the server_name`
 
+// DefaultContextWindow is the default max context window for models.
+const DefaultContextWindow = 200_000
+
+// modelContextWindows maps model prefixes to their max context window sizes.
+var modelContextWindows = map[string]int{
+	"gpt-4o":         128_000,
+	"gpt-4":          128_000,
+	"gpt-3.5":        128_000,
+	"claude":         200_000,
+	"deepseek":       200_000,
+	"deepseek-chat":  200_000,
+	"deepseek-reasoner": 200_000,
+	"gemini":         1_000_000,
+	"llama":          128_000,
+	"mistral":        128_000,
+	"qwen":           128_000,
+	"command-r":      128_000,
+}
+
 // SessionUsage tracks cumulative token usage for a session.
 type SessionUsage struct {
 	PromptTokens     int `json:"promptTokens"`
@@ -101,6 +120,7 @@ type SessionUsage struct {
 	TotalTokens      int `json:"totalTokens"`
 	CacheHitTokens   int `json:"cacheHitTokens"`
 	CacheMissTokens  int `json:"cacheMissTokens"`
+	ContextWindow    int `json:"contextWindow"`
 }
 
 // CacheHitRate returns the cache hit percentage (0-100).
@@ -110,6 +130,30 @@ func (u *SessionUsage) CacheHitRate() float64 {
 		return 0
 	}
 	return float64(u.CacheHitTokens) / float64(total) * 100
+}
+
+// ContextUsagePercent returns the percentage of the context window used.
+func (u *SessionUsage) ContextUsagePercent() float64 {
+	if u.ContextWindow == 0 {
+		return 0
+	}
+	return float64(u.PromptTokens) / float64(u.ContextWindow) * 100
+}
+
+// ContextWindowForModel returns the known context window for a model name,
+// or the default if unknown.
+func ContextWindowForModel(model string) int {
+	// Check exact match first
+	if w, ok := modelContextWindows[model]; ok {
+		return w
+	}
+	// Check prefix match
+	for prefix, w := range modelContextWindows {
+		if strings.HasPrefix(model, prefix) {
+			return w
+		}
+	}
+	return DefaultContextWindow
 }
 
 // AgentRunner manages the agent conversation loop.
@@ -183,6 +227,9 @@ func (r *AgentRunner) Run(ctx context.Context, userMessage string) error {
 			r.usage.TotalTokens += resp.Usage.TotalTokens
 			r.usage.CacheHitTokens += resp.Usage.PromptCacheHitTokens
 			r.usage.CacheMissTokens += resp.Usage.PromptCacheMissTokens
+		}
+		if r.usage.ContextWindow == 0 {
+			r.usage.ContextWindow = ContextWindowForModel(r.client.Model)
 		}
 		r.logger.LogUsage(r.usage)
 
@@ -291,6 +338,9 @@ func (r *AgentRunner) RunStreaming(ctx context.Context, userMessage string) erro
 			r.usage.TotalTokens += resp.Usage.TotalTokens
 			r.usage.CacheHitTokens += resp.Usage.PromptCacheHitTokens
 			r.usage.CacheMissTokens += resp.Usage.PromptCacheMissTokens
+		}
+		if r.usage.ContextWindow == 0 {
+			r.usage.ContextWindow = ContextWindowForModel(r.client.Model)
 		}
 		r.logger.LogUsage(r.usage)
 
