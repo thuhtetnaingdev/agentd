@@ -255,15 +255,10 @@ export default function Chat({ projectId }: { projectId: string }) {
                 {" · "}
                 {msg.timestamp.toLocaleTimeString()}
               </div>
-              {/* Reasoning (chain-of-thought) — always visible for debugging */}
-              {msg.reasoning && (
-                <div className="mt-1 mb-2 p-2 bg-purple-500/5 border border-purple-500/20 rounded">
-                  <div className="text-[11px] text-purple-500 font-medium mb-1">Reasoning</div>
-                  <div className="text-xs text-muted-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
-                    {msg.reasoning}
-                  </div>
-                </div>
-              )}
+              {/* Reasoning debug — always renders so we can see what's happening */}
+              <div style={{marginTop: 8, marginBottom: 8, padding: 8, border: '2px solid red', borderRadius: 4, fontSize: 11}}>
+                REASONING DEBUG: typeof={typeof msg.reasoning} value={JSON.stringify(msg.reasoning)}
+              </div>
               <div className="text-sm whitespace-pre-wrap break-words leading-relaxed">
                 {msg.content}
               </div>
