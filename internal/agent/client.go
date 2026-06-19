@@ -67,8 +67,8 @@ type JSONProp struct {
 
 type ChatRequest struct {
 	Model      string        `json:"model"`
-	Messages   []ChatMessage `json:"messages"`
 	Tools      []ToolDef     `json:"tools,omitempty"`
+	Messages   []ChatMessage `json:"messages"`
 	ToolChoice string        `json:"tool_choice,omitempty"`
 	Stream     bool          `json:"stream"`
 }
