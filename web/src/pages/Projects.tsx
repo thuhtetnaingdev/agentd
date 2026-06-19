@@ -93,6 +93,7 @@ export default function Projects() {
   const [streamingReasoning, setStreamingReasoning] = useState("");
   const [showReasoning, setShowReasoning] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const reasoningRef = useRef(""); // ref avoids stale closure issues
 
   const fmtTokens = (n: number) => {
     if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -141,8 +142,9 @@ export default function Projects() {
 
     switch (msg.type) {
       case "reasoning_update":
-        // Accumulate reasoning content as it arrives
-        setStreamingReasoning((prev) => prev + (msg.payload?.content || ""));
+        // Accumulate reasoning content as it arrives (ref avoids stale closure)
+        reasoningRef.current += msg.payload?.content || "";
+        setStreamingReasoning(reasoningRef.current);
         setShowReasoning(true);
         break;
       case "content_chunk":
@@ -158,9 +160,10 @@ export default function Projects() {
             id: crypto.randomUUID(),
             role: "agent",
             content: msg.payload.content,
-            reasoning: streamingReasoning || undefined,
+            reasoning: reasoningRef.current || undefined,
             timestamp: new Date(),
           });
+          reasoningRef.current = "";
           setStreamingReasoning("");
         }
         break;
